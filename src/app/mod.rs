@@ -106,7 +106,6 @@ struct CadencePalette {
     link: u32,
     accent_hover: u32,
     on_accent: u32,
-    media_border: gpui_kit::Hsla,
 }
 
 impl CadencePalette {
@@ -135,12 +134,6 @@ impl CadencePalette {
         link: 0x0066CC,
         accent_hover: 0x121212,
         on_accent: 0xFFFFFF,
-        media_border: gpui_kit::Hsla {
-            h: 0.,
-            s: 0.,
-            l: 0.,
-            a: 0.1,
-        },
     };
 
     const DARK: Self = Self {
@@ -168,12 +161,6 @@ impl CadencePalette {
         link: 0x2997FF,
         accent_hover: 0xFFFFFF,
         on_accent: 0x171717,
-        media_border: gpui_kit::Hsla {
-            h: 0.,
-            s: 0.,
-            l: 1.,
-            a: 0.12,
-        },
     };
 }
 
@@ -367,18 +354,21 @@ fn index_favorites(favorites: &[model::Track]) -> HashMap<model::Provider, HashS
 }
 
 async fn receive_backend_event_batch(
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<BackendEvent>,
+    events: &mut crate::backend::EventReceiver,
 ) -> Option<Vec<BackendEvent>> {
     let first = events.recv().await?;
     let mut batch = vec![first];
-    while let Ok(event) = events.try_recv() {
+    while batch.len() < 128 {
+        let Ok(event) = events.try_recv() else {
+            break;
+        };
         batch.push(event);
     }
     Some(batch)
 }
 
 /// Stream of backend events from the worker thread.
-type BackendEvents = tokio::sync::mpsc::UnboundedReceiver<BackendEvent>;
+type BackendEvents = crate::backend::EventReceiver;
 
 mod actions;
 mod appearance;
@@ -407,9 +397,18 @@ mod sidebar;
 mod tokens;
 mod track_list;
 mod track_row;
+#[cfg(target_os = "macos")]
+#[path = "updater_macos.rs"]
+mod updater;
+#[cfg(target_os = "windows")]
+#[path = "updater_windows.rs"]
 mod updater;
 mod windows;
 mod workspace;
+
+pub fn run() {
+    bootstrap::run();
+}
 
 #[cfg(test)]
 mod event_bridge_tests {
@@ -437,10 +436,12 @@ mod event_bridge_tests {
 
     #[tokio::test]
     async fn batches_events_that_are_already_queued() {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        sender.send(BackendEvent::SetupRequired).unwrap();
+        let (_shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (sender, mut receiver) = crate::backend::event_channel(shutdown_receiver);
+        sender.send(BackendEvent::SetupRequired).await.unwrap();
         sender
             .send(BackendEvent::CatalogReady { generation: 0 })
+            .await
             .unwrap();
 
         let events = receive_backend_event_batch(&mut receiver).await.unwrap();
@@ -455,7 +456,8 @@ mod event_bridge_tests {
 
     #[tokio::test]
     async fn closes_after_all_senders_are_dropped() {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (_shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (sender, mut receiver) = crate::backend::event_channel(shutdown_receiver);
         drop(sender);
 
         assert!(receive_backend_event_batch(&mut receiver).await.is_none());
@@ -488,10 +490,6 @@ mod event_bridge_tests {
         assert!(index[&model::Provider::Spotify].contains("same-id"));
         assert!(index[&model::Provider::Tidal].contains("same-id"));
     }
-}
-
-pub fn run() {
-    bootstrap::run();
 }
 
 #[cfg(all(test, target_os = "macos"))]

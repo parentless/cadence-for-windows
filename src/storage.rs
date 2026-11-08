@@ -87,7 +87,7 @@ impl Store {
         let version: u32 = self
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 5 {
+        if version > 7 {
             anyhow::bail!("database schema version {version} is newer than this Cadence build");
         }
         if version < 4 {
@@ -103,6 +103,17 @@ impl Store {
                  PRAGMA user_version = 5;
                  COMMIT;",
             )?;
+        }
+        if version == 6 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 DROP TABLE playback_archive;
+                 ALTER TABLE playback_state DROP COLUMN queue_offset;
+                 PRAGMA user_version = 7;
+                 COMMIT;",
+            )?;
+        } else if version < 7 {
+            self.connection.execute_batch("PRAGMA user_version = 7;")?;
         }
         Ok(())
     }
@@ -240,6 +251,37 @@ impl Store {
             autoplay,
             mascot,
         })
+    }
+
+    pub(crate) fn discord_config(&self) -> Result<crate::discord::Config> {
+        Ok(crate::discord::Config {
+            enabled: self.preference("discord_enabled")?.as_deref() == Some("true"),
+            application_id: self
+                .preference("discord_application_id")?
+                .unwrap_or_default(),
+        })
+    }
+
+    pub(crate) fn set_discord_config(&mut self, config: &crate::discord::Config) -> Result<()> {
+        anyhow::ensure!(
+            !config.enabled || crate::discord::valid_application_id(&config.application_id),
+            "enter a valid Discord Application ID"
+        );
+        let transaction = self.connection.transaction()?;
+        for (key, value) in [
+            (
+                "discord_enabled",
+                if config.enabled { "true" } else { "false" },
+            ),
+            ("discord_application_id", config.application_id.as_str()),
+        ] {
+            transaction.execute(
+                "INSERT INTO preferences (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn set_autoplay(&mut self, autoplay: bool) -> Result<()> {
@@ -518,7 +560,6 @@ impl Store {
             tracks.get(index).is_some(),
             "playback index is out of bounds"
         );
-        let index = i64::try_from(index).context("playback index exceeds SQLite range")?;
         self.connection.execute(
             "INSERT INTO playback_state (id, tracks_json, current_index, position_ms, updated_at)
              VALUES (1, ?1, ?2, ?3, unixepoch())
@@ -529,7 +570,7 @@ impl Store {
                  updated_at = excluded.updated_at",
             params![
                 serde_json::to_string(tracks)?,
-                index,
+                i64::try_from(index)?,
                 i64::from(position_ms)
             ],
         )?;
@@ -701,6 +742,34 @@ mod tests {
     }
 
     #[test]
+    fn discord_configuration_is_opt_in_and_persists_atomically() {
+        let mut store = Store::in_memory().unwrap();
+        assert_eq!(
+            store.discord_config().unwrap(),
+            crate::discord::Config::default()
+        );
+        let config = crate::discord::Config {
+            enabled: true,
+            application_id: "123456789012345678".into(),
+        };
+        store.set_discord_config(&config).unwrap();
+        assert_eq!(store.discord_config().unwrap(), config);
+        let invalid = crate::discord::Config {
+            enabled: true,
+            application_id: "not-an-id".into(),
+        };
+        assert!(store.set_discord_config(&invalid).is_err());
+        assert_eq!(store.discord_config().unwrap(), config);
+        store
+            .set_discord_config(&crate::discord::Config {
+                enabled: false,
+                ..config
+            })
+            .unwrap();
+        assert!(!store.discord_config().unwrap().enabled);
+    }
+
+    #[test]
     fn preferences_round_trip() {
         let mut store = Store::in_memory().unwrap();
         assert_eq!(store.preferences().unwrap(), AppPreferences::default());
@@ -842,6 +911,38 @@ mod tests {
 
         store.clear_playback_state().unwrap();
         assert!(store.playback_state().unwrap().is_none());
+    }
+
+    #[test]
+    fn migration_removes_old_queue_archive_and_preserves_saved_playback() {
+        for version in [5, 6] {
+            let store = Store::in_memory().unwrap();
+            store.set_playback_state(&[track("saved")], 0, 123).unwrap();
+            if version == 6 {
+                store.connection.execute_batch(
+                    "ALTER TABLE playback_state ADD COLUMN queue_offset INTEGER NOT NULL DEFAULT 0;
+                     CREATE TABLE playback_archive (position INTEGER PRIMARY KEY, source_id TEXT NOT NULL, track_json TEXT NOT NULL);
+                     CREATE INDEX playback_archive_source ON playback_archive(source_id);
+                     INSERT INTO playback_archive VALUES (0, 'old', '{}');
+                     UPDATE playback_state SET queue_offset = 100;",
+                ).unwrap();
+            }
+            store
+                .connection
+                .pragma_update(None, "user_version", version)
+                .unwrap();
+            store.migrate().unwrap();
+            let state = store.playback_state().unwrap().unwrap();
+            assert_eq!(state.tracks, vec![track("saved")]);
+            assert_eq!(state.index, 0);
+            assert_eq!(state.position_ms, 123);
+            assert_eq!(store.connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('playback_archive', 'playback_archive_source')", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+            store.set_playback_state(&[track("next")], 0, 456).unwrap();
+            assert_eq!(
+                store.playback_state().unwrap().unwrap().tracks,
+                vec![track("next")]
+            );
+        }
     }
 
     #[test]

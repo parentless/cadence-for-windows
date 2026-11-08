@@ -87,8 +87,8 @@ pub(super) const ALBUM_CARD_ARTWORK: ArtworkSize = ArtworkSize {
     radius: Rems(0.875),
 };
 pub(super) const ARTIST_ARTWORK: ArtworkSize = ArtworkSize {
-    size: Rems(9.),
-    radius: Rems(4.5),
+    size: Rems(10.),
+    radius: Rems(1.),
 };
 pub(super) const COLLECTION_ARTWORK: ArtworkSize = ArtworkSize {
     size: Rems(11.),

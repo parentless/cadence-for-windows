@@ -1,6 +1,8 @@
 use super::*;
 
 pub(super) fn run() {
+    #[cfg(target_os = "windows")]
+    crate::diagnostics::init();
     let _ = env_logger::Builder::from_default_env()
         .format_timestamp_millis()
         .try_init();
@@ -8,7 +10,10 @@ pub(super) fn run() {
     let lifecycle = match InstanceLifecycle::acquire().expect("could not initialize app lifecycle")
     {
         Instance::Primary(lifecycle) => lifecycle,
-        Instance::Secondary => return,
+        Instance::Secondary => {
+            log::info!("startup: activated the existing instance; this launch will exit");
+            return;
+        }
     };
     let preferences_store = Store::open_default().ok();
     let preferences = preferences_store
@@ -18,7 +23,11 @@ pub(super) fn run() {
     let credentials_expected = preferences_store
         .as_ref()
         .is_some_and(stored_credentials_expected);
-    let app = gpui_kit::application().with_assets(assets::CadenceAssets);
+    // Match macOS's background playback lifetime on Windows too: GPUI's
+    // default on Windows quits as soon as its last visible window closes.
+    let app = gpui_kit::application()
+        .with_assets(assets::CadenceAssets)
+        .with_quit_mode(gpui_kit::QuitMode::Explicit);
     // Clicking the Dock icon with no window open puts one back over the
     // services that kept playing in the meantime.
     app.on_reopen(|cx| {
@@ -43,6 +52,12 @@ pub(super) fn run() {
         cx.set_menus(menus(updates_available));
         watch_for_activations(cx);
         windows::open_initial_window(credentials_expected, cx);
+        #[cfg(target_os = "windows")]
+        if cx.windows().is_empty() {
+            log::error!("startup: no window could be opened; exiting");
+            cx.quit();
+            return;
+        }
         log::info!("startup: first window opened");
         cx.activate(true);
     });
@@ -124,9 +139,33 @@ fn watch_for_activations(cx: &mut App) {
 
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("cmd-k", OpenSearch, Some(WORKSPACE_KEY_CONTEXT)),
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-k"
+            } else {
+                "ctrl-k"
+            },
+            OpenSearch,
+            Some(WORKSPACE_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-q"
+            } else {
+                "ctrl-q"
+            },
+            Quit,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-w"
+            } else {
+                "ctrl-w"
+            },
+            CloseWindow,
+            None,
+        ),
         KeyBinding::new("escape", DismissOverlay, Some(WORKSPACE_KEY_CONTEXT)),
         KeyBinding::new("escape", DismissOverlay, Some(ONBOARDING_KEY_CONTEXT)),
         KeyBinding::new("left", SeekBackward, Some(SCRUBBER_KEY_CONTEXT)),

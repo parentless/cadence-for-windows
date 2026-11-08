@@ -339,18 +339,55 @@ pub(super) fn settings_button(
         .child(label)
 }
 
+/// Static translucent materials reuse the already-blurred artist backdrop;
+/// no per-frame blur pass, animation, or image allocation is needed.
+fn glass_frame(frame: Div, palette: CadencePalette, menu: bool) -> Div {
+    let light = palette.canvas == CadencePalette::LIGHT.canvas;
+    let (top, bottom, rim) = match (light, menu) {
+        (true, _) => (0xFFFFFFEE, 0xF2F0EDE0, 0xFFFFFFCC),
+        (false, true) => (0x38363EEB, 0x26252BE8, 0xFFFFFF44),
+        (false, false) => (0xFFFFFF2C, 0xFFFFFF12, 0xFFFFFF55),
+    };
+    frame
+        .rounded_2xl()
+        .border_1()
+        .bg(gpui_kit::linear_gradient(
+            165.,
+            gpui_kit::linear_color_stop(gpui_kit::rgba(top), 0.),
+            gpui_kit::linear_color_stop(gpui_kit::rgba(bottom), 1.),
+        ))
+        .border_color(gpui_kit::rgba(rim))
+        .shadow(vec![
+            gpui_kit::BoxShadow::new(px(0.), px(4.), gpui_kit::rgba(0x00000028).into())
+                .blur_radius(px(12.)),
+            gpui_kit::BoxShadow::new(px(0.), px(1.), gpui_kit::rgba(0xFFFFFF22).into()).inset(),
+        ])
+}
+
+pub(super) fn glass_search_frame(
+    palette: CadencePalette,
+    input: &Entity<InputState>,
+    window: &Window,
+    cx: &App,
+) -> Div {
+    glass_frame(div().flex().items_center().px_3p5(), palette, false).when(
+        input.read(cx).focus_handle(cx).is_focused(window),
+        |frame| {
+            frame
+                .border_color(rgb(palette.focus_ring))
+                .shadow(inset_focus_ring(palette))
+        },
+    )
+}
+
 pub(super) fn menu_surface(palette: CadencePalette) -> Div {
-    div()
+    glass_frame(div(), palette, true)
         .occlude()
         .w(tokens::MENU_WIDTH)
         .p_1p5()
-        .rounded(tokens::CONTAINER_RADIUS)
-        .bg(rgb(palette.surface_raised))
-        .border_1()
-        .border_color(rgb(palette.border))
-        .shadow_lg()
         .flex()
         .flex_col()
+        .text_color(rgb(palette.text))
         .text_size(tokens::BODY_TEXT)
 }
 
@@ -392,24 +429,29 @@ pub(super) fn artwork(
 ) -> gpui_kit::AnyElement {
     let frame = div()
         .size(artwork_size.size)
+        .relative()
         .flex_none()
         .rounded(artwork_size.radius)
-        .overflow_hidden()
-        .bg(rgb(palette.selection))
-        .border_1()
-        .border_color(palette.media_border);
+        .overflow_hidden();
     if let Some(url) = url {
         frame
             .child(
                 img(url.to_owned())
                     .image_cache(image_cache)
-                    .size_full()
+                    // Absolute dimensions keep intrinsic portrait/wide image
+                    // ratios from influencing the square artwork's layout.
+                    .absolute()
+                    .inset_0()
+                    .size(artwork_size.size)
+                    .flex_none()
+                    .aspect_ratio(1.)
                     .rounded(artwork_size.radius)
                     .object_fit(gpui_kit::ObjectFit::Cover),
             )
             .into_any_element()
     } else {
         frame
+            .bg(rgb(palette.selection))
             .flex()
             .items_center()
             .justify_center()

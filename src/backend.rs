@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use librespot::{core::SpotifyUri, playback::player::PlayerEvent};
-use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     model::{Album, Artist, CachedLibrary, LibraryFingerprint, Playlist, Track, UserProfile},
@@ -26,6 +26,7 @@ const CATALOG_TIMEOUT_SECONDS: u64 = 30;
 const LIBRARY_TIMEOUT_SECONDS: u64 = 60;
 const COMMAND_CAPACITY: usize = 256;
 const CONTROL_CAPACITY: usize = 8;
+const PLAYED_TRACK_WINDOW: usize = 50;
 
 struct AuthorizationSuccess {
     playback: Option<PlaybackConnectionRequest>,
@@ -431,6 +432,117 @@ pub enum BackendEvent {
     Error(String),
 }
 
+const EVENT_CAPACITY: usize = 128;
+type PositionUpdate = Option<(String, u32)>;
+
+/// Reliable events apply backpressure; clock updates occupy one replaceable slot.
+#[derive(Clone)]
+pub(crate) struct EventSender {
+    reliable: Sender<BackendEvent>,
+    position: tokio::sync::watch::Sender<PositionUpdate>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+}
+
+/// Bounded backend notifications with coalesced playback clock updates.
+pub struct EventReceiver {
+    reliable: Receiver<BackendEvent>,
+    position: tokio::sync::watch::Receiver<PositionUpdate>,
+}
+
+pub(crate) fn event_channel(
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> (EventSender, EventReceiver) {
+    let (sender, reliable) = tokio::sync::mpsc::channel(EVENT_CAPACITY);
+    let (position_sender, position) = tokio::sync::watch::channel(None);
+    (
+        EventSender {
+            reliable: sender,
+            position: position_sender,
+            shutdown,
+        },
+        EventReceiver { reliable, position },
+    )
+}
+
+impl EventSender {
+    pub(crate) async fn send(&self, event: BackendEvent) -> Result<(), ()> {
+        if *self.shutdown.borrow() {
+            return Err(());
+        }
+        if let BackendEvent::PositionChanged {
+            spotify_uri,
+            position_ms,
+        } = event
+        {
+            return self
+                .position
+                .send(Some((spotify_uri, position_ms)))
+                .map_err(|_| ());
+        }
+        self.send_ordered(event).await
+    }
+
+    async fn send_ordered(&self, event: BackendEvent) -> Result<(), ()> {
+        if *self.shutdown.borrow() {
+            return Err(());
+        }
+        if matches!(&event, BackendEvent::PositionChanged { .. }) {
+            // Playing/Paused carry an exact position in the reliable stream.
+            // Clear older replaceable ticks so they cannot rewind that anchor.
+            let _ = self.position.send(None);
+        }
+        let mut shutdown = self.shutdown.clone();
+        tokio::select! {
+            result = self.reliable.send(event) => result.map_err(|_| ()),
+            _ = wait_for_shutdown(&mut shutdown) => Err(()),
+        }
+    }
+}
+
+impl EventReceiver {
+    fn latest_position(&mut self) -> Option<BackendEvent> {
+        self.position
+            .borrow_and_update()
+            .clone()
+            .map(|(spotify_uri, position_ms)| BackendEvent::PositionChanged {
+                spotify_uri,
+                position_ms,
+            })
+    }
+
+    pub async fn recv(&mut self) -> Option<BackendEvent> {
+        loop {
+            if let Ok(event) = self.try_recv() {
+                return Some(event);
+            }
+            tokio::select! {
+                biased;
+                event = self.reliable.recv() => {
+                    if event.is_some() { return event; }
+                    return if self.position.changed().await.is_ok() { self.latest_position() } else { None };
+                }
+                changed = self.position.changed() => {
+                    if changed.is_err() { return self.reliable.recv().await; }
+                    if let Some(position) = self.latest_position() { return Some(position); }
+                }
+            }
+        }
+    }
+
+    pub fn try_recv(&mut self) -> Result<BackendEvent, tokio::sync::mpsc::error::TryRecvError> {
+        match self.reliable.try_recv() {
+            Ok(event) => Ok(event),
+            Err(error) => {
+                if self.position.has_changed().unwrap_or(false) {
+                    self.latest_position().ok_or(error)
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+}
+
 struct Senders {
     commands: Sender<BackendCommand>,
     controls: Sender<BackendCommand>,
@@ -508,7 +620,7 @@ impl Backend {
         )
     }
 
-    pub fn start() -> (Self, UnboundedReceiver<BackendEvent>) {
+    pub fn start() -> (Self, EventReceiver) {
         let (senders, shutdown, thread, events) = Self::spawn_worker();
         let commands = senders.commands.clone();
         (
@@ -526,7 +638,7 @@ impl Backend {
 
     /// Starts a replacement worker and points `handle`, and every clone of it
     /// already handed out, at the new one.
-    pub fn restart(handle: &BackendHandle) -> (Self, UnboundedReceiver<BackendEvent>) {
+    pub fn restart(handle: &BackendHandle) -> (Self, EventReceiver) {
         let (senders, shutdown, thread, events) = Self::spawn_worker();
         let commands = senders.commands.clone();
         handle.redirect(senders);
@@ -545,13 +657,13 @@ impl Backend {
         Senders,
         tokio::sync::watch::Sender<bool>,
         thread::JoinHandle<()>,
-        UnboundedReceiver<BackendEvent>,
+        EventReceiver,
     ) {
         let (commands, command_receiver) = tokio::sync::mpsc::channel(COMMAND_CAPACITY);
         let (controls, control_receiver) = tokio::sync::mpsc::channel(CONTROL_CAPACITY);
-        let (event_sender, events) = tokio::sync::mpsc::unbounded_channel();
         let (volume, volume_receiver) = tokio::sync::watch::channel(0.72);
         let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (event_sender, events) = event_channel(shutdown_receiver.clone());
         let thread = thread::Builder::new()
             .name("cadence-backend".to_owned())
             .spawn(move || {
@@ -646,13 +758,13 @@ struct Startup {
 /// setup finished, so the caller can hand it back to whoever asked to stop.
 async fn start(
     commands: &mut Receiver<BackendCommand>,
-    events: &UnboundedSender<BackendEvent>,
+    events: &EventSender,
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<Startup, Option<StdSender<()>>> {
     let store = match BlockingStore::open_default().await {
         Ok(store) => store,
         Err(error) => {
-            send_fatal_error(events, error);
+            send_fatal_error(events, error).await;
             return Err(None);
         }
     };
@@ -661,28 +773,30 @@ async fn start(
     let playback_snapshot = match store.playback_state().await {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            send_error(events, error);
+            send_error(events, error).await;
             None
         }
     };
     if let Some(snapshot) = &playback_snapshot
         && let Some(current) = snapshot.tracks.get(snapshot.index)
     {
-        let _ = events.send(BackendEvent::PlaybackSnapshotLoaded {
-            current: current.clone(),
-            next: snapshot
-                .tracks
-                .get(snapshot.index + 1..)
-                .unwrap_or_default()
-                .to_vec(),
-            position_ms: snapshot.position_ms,
-        });
+        let _ = events
+            .send(BackendEvent::PlaybackSnapshotLoaded {
+                current: current.clone(),
+                next: snapshot
+                    .tracks
+                    .get(snapshot.index + 1..)
+                    .unwrap_or_default()
+                    .to_vec(),
+                position_ms: snapshot.position_ms,
+            })
+            .await;
     }
     let environment_client_id = std::env::var("SPOTIFY_CLIENT_ID").ok();
     let saved_client_id = match store.call(|store| store.spotify_client_id()).await {
         Ok(client_id) => client_id,
         Err(error) => {
-            send_fatal_error(events, error);
+            send_fatal_error(events, error).await;
             return Err(None);
         }
     };
@@ -692,7 +806,7 @@ async fn start(
     {
         Ok(invalidated) => invalidated,
         Err(error) => {
-            send_fatal_error(events, error);
+            send_fatal_error(events, error).await;
             return Err(None);
         }
     };
@@ -702,7 +816,7 @@ async fn start(
     {
         Ok(invalidated) => invalidated,
         Err(error) => {
-            send_fatal_error(events, error);
+            send_fatal_error(events, error).await;
             return Err(None);
         }
     };
@@ -713,15 +827,19 @@ async fn start(
         && !valid_client_id(&configured.client_id)
     {
         if configured.source == ClientIdSource::Environment {
-            let _ = events.send(BackendEvent::SpotifyConfigured {
-                generation: 0,
-                client_id: configured.client_id,
-                source: ClientIdSource::Environment,
-            });
-            let _ = events.send(BackendEvent::SpotifyConfigurationFailed {
-                generation: 0,
-                error: "SPOTIFY_CLIENT_ID must contain 32 hexadecimal characters".to_owned(),
-            });
+            let _ = events
+                .send(BackendEvent::SpotifyConfigured {
+                    generation: 0,
+                    client_id: configured.client_id,
+                    source: ClientIdSource::Environment,
+                })
+                .await;
+            let _ = events
+                .send(BackendEvent::SpotifyConfigurationFailed {
+                    generation: 0,
+                    error: "SPOTIFY_CLIENT_ID must contain 32 hexadecimal characters".to_owned(),
+                })
+                .await;
             while let Some(command) = commands.recv().await {
                 if let BackendCommand::Shutdown { acknowledged } = command {
                     return Err(Some(acknowledged));
@@ -730,7 +848,7 @@ async fn start(
             return Err(None);
         }
         if let Err(error) = store.call(|store| store.remove_spotify_client_id()).await {
-            send_fatal_error(events, error);
+            send_fatal_error(events, error).await;
             return Err(None);
         }
         configuration = None;
@@ -750,10 +868,12 @@ async fn start(
                     break spotify;
                 }
                 Err(error) => {
-                    let _ = events.send(BackendEvent::SpotifyConfigurationFailed {
-                        generation: configuration_generation,
-                        error: error.to_string(),
-                    });
+                    let _ = events
+                        .send(BackendEvent::SpotifyConfigurationFailed {
+                            generation: configuration_generation,
+                            error: error.to_string(),
+                        })
+                        .await;
                     if configured.source == ClientIdSource::Saved {
                         let _ = store.remove_spotify_client_id().await;
                         configuration = None;
@@ -764,7 +884,7 @@ async fn start(
             }
         }
 
-        let _ = events.send(BackendEvent::SetupRequired);
+        let _ = events.send(BackendEvent::SetupRequired).await;
         let command = tokio::select! {
             command = commands.recv() => command.ok_or(None)?,
             _ = wait_for_shutdown(shutdown) => return Err(receive_shutdown_acknowledgment(commands).await),
@@ -782,18 +902,22 @@ async fn start(
                 let candidate = match candidate {
                     Ok(candidate) => candidate,
                     Err(error) => {
-                        let _ = events.send(BackendEvent::SpotifyConfigurationFailed {
-                            generation,
-                            error: error.to_string(),
-                        });
+                        let _ = events
+                            .send(BackendEvent::SpotifyConfigurationFailed {
+                                generation,
+                                error: error.to_string(),
+                            })
+                            .await;
                         continue;
                     }
                 };
                 if let Err(error) = store.configure_spotify(client_id.clone()).await {
-                    let _ = events.send(BackendEvent::SpotifyConfigurationFailed {
-                        generation,
-                        error: error.to_string(),
-                    });
+                    let _ = events
+                        .send(BackendEvent::SpotifyConfigurationFailed {
+                            generation,
+                            error: error.to_string(),
+                        })
+                        .await;
                     continue;
                 }
                 configuration = Some(SpotifyConfiguration {
@@ -805,10 +929,13 @@ async fn start(
                 break candidate;
             }
             BackendCommand::ConfigureSpotify { generation, .. } => {
-                let _ = events.send(BackendEvent::SpotifyConfigurationFailed {
-                    generation,
-                    error: "Spotify Client ID must contain 32 hexadecimal characters".to_owned(),
-                });
+                let _ = events
+                    .send(BackendEvent::SpotifyConfigurationFailed {
+                        generation,
+                        error: "Spotify Client ID must contain 32 hexadecimal characters"
+                            .to_owned(),
+                    })
+                    .await;
             }
             BackendCommand::Shutdown { acknowledged } => return Err(Some(acknowledged)),
             _ => {}
@@ -817,11 +944,13 @@ async fn start(
     let configured = configuration
         .as_ref()
         .expect("Spotify configuration must exist after setup");
-    let _ = events.send(BackendEvent::SpotifyConfigured {
-        generation: configuration_generation,
-        client_id: configured.client_id.clone(),
-        source: configured.source,
-    });
+    let _ = events
+        .send(BackendEvent::SpotifyConfigured {
+            generation: configuration_generation,
+            client_id: configured.client_id.clone(),
+            source: configured.source,
+        })
+        .await;
     Ok(Startup {
         store,
         spotify,
@@ -834,7 +963,7 @@ async fn start(
 async fn run(
     mut commands: Receiver<BackendCommand>,
     mut controls: Receiver<BackendCommand>,
-    events: UnboundedSender<BackendEvent>,
+    events: EventSender,
     mut volume: tokio::sync::watch::Receiver<f32>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Option<StdSender<()>> {
@@ -863,15 +992,15 @@ async fn run(
                 continue;
             }
             _ = playback_health.tick() => {
-                worker.connection.reconnect_if_dead(&worker.events);
+                worker.connection.reconnect_if_dead(&worker.events).await;
                 continue;
             }
             reconnected = finished(&mut worker.connection.reconnect) => {
-                worker.connection.finish_reconnect(reconnected, &worker.events);
+                worker.connection.finish_reconnect(reconnected, &worker.events).await;
                 if let Some((tracks, index)) = worker.connection.pending_play.take()
                     && let Err(error) = worker.play_context(tracks, index).await
                 {
-                    send_error(&worker.events, error);
+                    send_error(&worker.events, error).await;
                 }
                 continue;
             }
@@ -896,7 +1025,7 @@ async fn run(
                 continue;
             }
             logout = finished(&mut worker.session.logout) => {
-                worker.finish_logout(logout);
+                worker.finish_logout(logout).await;
                 continue;
             }
         };
@@ -913,7 +1042,7 @@ type Finished<T> = Option<Result<T, tokio::task::JoinError>>;
 /// The running backend once Spotify is configured: the session state plus the
 /// services that own the in-flight work.
 struct Worker {
-    events: UnboundedSender<BackendEvent>,
+    events: EventSender,
     store: BlockingStore,
     spotify: Spotify,
     configuration: Option<SpotifyConfiguration>,
@@ -930,7 +1059,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(startup: Startup, events: UnboundedSender<BackendEvent>) -> Self {
+    fn new(startup: Startup, events: EventSender) -> Self {
         Self {
             events,
             store: startup.store,
@@ -960,7 +1089,7 @@ impl Worker {
             authorized = self.spotify.is_authorized() => match authorized {
                 Ok(authorized) => authorized,
                 Err(error) => {
-                    send_fatal_error(&self.events, error);
+                    send_fatal_error(&self.events, error).await;
                     return Err(None);
                 }
             },
@@ -969,7 +1098,7 @@ impl Worker {
             }
         };
         if !is_authorized {
-            let _ = self.events.send(BackendEvent::AuthorizationRequired);
+            let _ = self.events.send(BackendEvent::AuthorizationRequired).await;
             return Ok(());
         }
         log::info!("startup: account authorized");
@@ -990,7 +1119,7 @@ impl Worker {
         let cached = match self.store.cached_library().await {
             Ok(cached) => cached,
             Err(error) => {
-                send_error(&self.events, error);
+                send_error(&self.events, error).await;
                 CachedLibrary::default()
             }
         };
@@ -1005,12 +1134,18 @@ impl Worker {
         );
         self.catalog.seed_fingerprint(cached.fingerprint);
         let generation = self.account_generation;
-        let _ = self.events.send(BackendEvent::CachedLibrary {
-            generation,
-            liked_tracks: cached.liked_tracks,
-            playlists: cached.playlists,
-        });
-        let _ = self.events.send(BackendEvent::CatalogReady { generation });
+        let _ = self
+            .events
+            .send(BackendEvent::CachedLibrary {
+                generation,
+                liked_tracks: cached.liked_tracks,
+                playlists: cached.playlists,
+            })
+            .await;
+        let _ = self
+            .events
+            .send(BackendEvent::CatalogReady { generation })
+            .await;
     }
 
     /// Returns the shutdown acknowledgment once a `Shutdown` command arrives;
@@ -1026,7 +1161,7 @@ impl Worker {
                 BackendCommand::Logout { .. } | BackendCommand::Shutdown { .. }
             )
         {
-            send_error(&self.events, "Spotify logout is still finishing");
+            send_error(&self.events, "Spotify logout is still finishing").await;
             return None;
         }
         let result = match command {
@@ -1041,11 +1176,11 @@ impl Worker {
                     .await
             }
             BackendCommand::Authenticate { generation } => {
-                self.authenticate(generation);
+                self.authenticate(generation).await;
                 Ok(())
             }
             BackendCommand::Logout { generation } => {
-                self.logout(generation);
+                self.logout(generation).await;
                 Ok(())
             }
             BackendCommand::ReloadLibrary { respond } => {
@@ -1071,13 +1206,15 @@ impl Worker {
                 Ok(())
             }
             BackendCommand::StartRadio { request_id, seed } => {
-                self.radio.start(
-                    request_id,
-                    seed,
-                    self.connection.player.clone(),
-                    self.spotify.clone(),
-                    &self.events,
-                );
+                self.radio
+                    .start(
+                        request_id,
+                        seed,
+                        self.connection.player.clone(),
+                        self.spotify.clone(),
+                        &self.events,
+                    )
+                    .await;
                 Ok(())
             }
             BackendCommand::PlayContext { tracks, index } => self.play_context(tracks, index).await,
@@ -1093,8 +1230,8 @@ impl Worker {
             BackendCommand::SetPlaylistPinned { playlist, pinned } => {
                 self.set_playlist_pinned(playlist, pinned).await
             }
-            BackendCommand::Resume => self.resume(),
-            BackendCommand::Pause => self.pause(),
+            BackendCommand::Resume => self.resume().await,
+            BackendCommand::Pause => self.pause().await,
             BackendCommand::MarkPlayed(track) => self.mark_played(track).await,
             BackendCommand::Next => self.next_track().await,
             BackendCommand::Previous => self.previous_track().await,
@@ -1114,7 +1251,7 @@ impl Worker {
             }
         };
         if let Err(error) = result {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         None
     }
@@ -1126,7 +1263,7 @@ impl Worker {
         if self.configuration_is_from_environment() {
             let _ = self.events.send(BackendEvent::SpotifyConfigurationResetFailed(
                 "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Cadence".to_owned(),
-            ));
+            )).await;
             return Ok(());
         }
         if let Err(error) = self.store.reset_spotify_configuration().await {
@@ -1134,27 +1271,28 @@ impl Worker {
                 .events
                 .send(BackendEvent::SpotifyConfigurationResetFailed(
                     error.to_string(),
-                ));
+                ))
+                .await;
             return Ok(());
         }
-        self.abort_account_work();
-        self.stop_playback_session();
+        self.abort_account_work().await;
+        self.stop_playback_session().await;
         self.playback_credentials_invalidated = true;
         self.configuration = None;
         if let Err(error) = self.spotify.logout().await {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         if let Err(error) = delete_playback_refresh_token().await {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         if let Err(error) = self.store.clear_library_cache().await {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         if let Err(error) = self.store.clear_playback_state().await {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
-        let _ = self.events.send(BackendEvent::LoggedOut);
-        let _ = self.events.send(BackendEvent::SetupRequired);
+        let _ = self.events.send(BackendEvent::LoggedOut).await;
+        let _ = self.events.send(BackendEvent::SetupRequired).await;
         Ok(())
     }
 
@@ -1170,21 +1308,23 @@ impl Worker {
             self.send_configuration_failed(
                 generation,
                 "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Cadence",
-            );
+            ).await;
             return Ok(());
         }
         if self.configuration.is_some() {
             self.send_configuration_failed(
                 generation,
                 "Remove the current Spotify configuration before replacing it.",
-            );
+            )
+            .await;
             return Ok(());
         }
         if !valid_client_id(&client_id) {
             self.send_configuration_failed(
                 generation,
                 "Spotify Client ID must contain 32 hexadecimal characters",
-            );
+            )
+            .await;
             return Ok(());
         }
         let client_id = client_id.trim().to_owned();
@@ -1195,12 +1335,12 @@ impl Worker {
         let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(error) => {
-                self.send_configuration_failed(generation, error);
+                self.send_configuration_failed(generation, error).await;
                 return Ok(());
             }
         };
         if let Err(error) = self.store.configure_spotify(client_id.clone()).await {
-            self.send_configuration_failed(generation, error);
+            self.send_configuration_failed(generation, error).await;
             return Ok(());
         }
         self.spotify = candidate;
@@ -1209,16 +1349,19 @@ impl Worker {
             client_id: client_id.clone(),
             source: ClientIdSource::Saved,
         });
-        let _ = self.events.send(BackendEvent::SpotifyConfigured {
-            generation,
-            client_id,
-            source: ClientIdSource::Saved,
-        });
-        let _ = self.events.send(BackendEvent::AuthorizationRequired);
+        let _ = self
+            .events
+            .send(BackendEvent::SpotifyConfigured {
+                generation,
+                client_id,
+                source: ClientIdSource::Saved,
+            })
+            .await;
+        let _ = self.events.send(BackendEvent::AuthorizationRequired).await;
         Ok(())
     }
 
-    fn authenticate(&mut self, generation: u64) {
+    async fn authenticate(&mut self, generation: u64) {
         abort_task(&mut self.connection.connect);
         let needs_playback = self
             .connection
@@ -1233,12 +1376,12 @@ impl Worker {
         );
     }
 
-    fn logout(&mut self, generation: u64) {
+    async fn logout(&mut self, generation: u64) {
         abort_task(&mut self.session.authorization);
         abort_task(&mut self.connection.connect);
         self.catalog_generation.store(generation, Ordering::Release);
-        self.abort_account_work();
-        self.stop_playback_session();
+        self.abort_account_work().await;
+        self.stop_playback_session().await;
         self.playback_credentials_invalidated = true;
         self.session
             .begin_logout(self.store.clone(), self.spotify.clone());
@@ -1299,7 +1442,7 @@ impl Worker {
     }
 
     async fn play_context(&mut self, tracks: Vec<Track>, index: usize) -> Result<()> {
-        self.radio.cancel(&self.events);
+        self.radio.cancel(&self.events).await;
         if self.connection.is_connecting() {
             self.connection.hold_play(tracks, index);
             return Ok(());
@@ -1314,11 +1457,14 @@ impl Worker {
                 self.commit_loaded_queue(index).await;
             }
             Err(error) => {
-                let _ = self.events.send(BackendEvent::TrackFailed {
-                    spotify_uri,
-                    error: error.to_string(),
-                });
-                let _ = self.events.send(BackendEvent::PlaybackSettled);
+                let _ = self
+                    .events
+                    .send(BackendEvent::TrackFailed {
+                        spotify_uri,
+                        error: error.to_string(),
+                    })
+                    .await;
+                let _ = self.events.send(BackendEvent::PlaybackSettled).await;
             }
         }
         Ok(())
@@ -1338,12 +1484,16 @@ impl Worker {
         self.replace_queue(updated_tracks, index).await
     }
 
-    async fn replace_queue(&mut self, tracks: Vec<Track>, index: usize) -> Result<()> {
+    async fn replace_queue(&mut self, mut tracks: Vec<Track>, index: usize) -> Result<()> {
+        let prune = index.saturating_sub(PLAYED_TRACK_WINDOW);
+        tracks.drain(..prune);
+        let index = index - prune;
         self.store
             .set_playback_state(tracks.clone(), index, self.queue.position_ms)
             .await?;
         self.queue.tracks = tracks;
-        send_playback_context(&self.queue.tracks, index, &self.events);
+        self.queue.index = Some(index);
+        send_playback_context(&self.queue.tracks, index, &self.events).await;
         Ok(())
     }
 
@@ -1355,21 +1505,25 @@ impl Worker {
             position_ms,
             playing,
             &self.events,
-        );
+        )
+        .await;
         if result.is_err() {
-            let _ = self.events.send(BackendEvent::PlaybackSettled);
+            let _ = self.events.send(BackendEvent::PlaybackSettled).await;
             return result;
         }
-        let _ = self.events.send(BackendEvent::PlaybackRestored {
-            position_ms,
-            playing,
-        });
+        let _ = self
+            .events
+            .send(BackendEvent::PlaybackRestored {
+                position_ms,
+                playing,
+            })
+            .await;
         // The restore performed a fresh load; the ended special-casing must
         // not survive it, or seeks would be swallowed against a live player.
         self.queue.ended = false;
         self.queue.position_ms = position_ms;
         if let Err(error) = self.store.update_playback_position(position_ms).await {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         if playing {
             self.maybe_prefetch_autoplay();
@@ -1395,7 +1549,7 @@ impl Worker {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    async fn resume(&mut self) -> Result<()> {
         if self.queue.ended {
             // play() is a no-op in librespot's EndOfTrack state: reload the
             // current track at the seeker's position instead.
@@ -1406,7 +1560,8 @@ impl Worker {
                 self.queue.position_ms,
                 true,
                 &self.events,
-            );
+            )
+            .await;
             match &result {
                 Ok(()) => {
                     self.queue.ended = false;
@@ -1415,32 +1570,32 @@ impl Worker {
                     self.maybe_prefetch_autoplay();
                 }
                 Err(_) => {
-                    let _ = self.events.send(BackendEvent::PlaybackSettled);
+                    let _ = self.events.send(BackendEvent::PlaybackSettled).await;
                 }
             }
             return result;
         }
         let result = self.connected_player().map(|player| player.play());
         if result.is_err() {
-            let _ = self.events.send(BackendEvent::PlaybackSettled);
+            let _ = self.events.send(BackendEvent::PlaybackSettled).await;
         } else {
             self.maybe_prefetch_autoplay();
         }
         result
     }
 
-    fn pause(&self) -> Result<()> {
+    async fn pause(&self) -> Result<()> {
         let result = self.connected_player().map(|player| player.pause());
         if result.is_err() {
-            let _ = self.events.send(BackendEvent::PlaybackSettled);
+            let _ = self.events.send(BackendEvent::PlaybackSettled).await;
         }
         result
     }
 
     async fn next_track(&mut self) -> Result<()> {
-        self.radio.cancel(&self.events);
+        self.radio.cancel(&self.events).await;
         let Some(current) = self.queue.index else {
-            let _ = self.events.send(BackendEvent::QueueEnded);
+            let _ = self.events.send(BackendEvent::QueueEnded).await;
             return Ok(());
         };
         let next = current
@@ -1457,9 +1612,9 @@ impl Worker {
             self.queue.ended = true;
             self.queue.position_ms = 0;
             if let Err(error) = self.store.update_playback_position(0).await {
-                send_error(&self.events, error);
+                send_error(&self.events, error).await;
             }
-            let _ = self.events.send(BackendEvent::QueueEnded);
+            let _ = self.events.send(BackendEvent::QueueEnded).await;
             // Late fallback: if the song outran the autoplay prefetch (or
             // none ran), this fetch resumes playback on arrival.
             self.maybe_prefetch_autoplay();
@@ -1469,16 +1624,16 @@ impl Worker {
     }
 
     async fn previous_track(&mut self) -> Result<()> {
-        self.radio.cancel(&self.events);
+        self.radio.cancel(&self.events).await;
         if let Some(index) = self.queue.index.and_then(|index| index.checked_sub(1)) {
             return self.load_queue_track(index).await;
         }
         let result = self.connected_player().map(|player| player.seek(0));
-        let _ = self.events.send(BackendEvent::PlaybackSettled);
+        let _ = self.events.send(BackendEvent::PlaybackSettled).await;
         if result.is_ok() {
             self.queue.position_ms = 0;
             if let Err(error) = self.store.update_playback_position(0).await {
-                send_error(&self.events, error);
+                send_error(&self.events, error).await;
             }
         }
         result
@@ -1494,7 +1649,7 @@ impl Worker {
         )
         .await;
         if result.is_err() {
-            let _ = self.events.send(BackendEvent::PlaybackSettled);
+            let _ = self.events.send(BackendEvent::PlaybackSettled).await;
             return result;
         }
         self.commit_loaded_queue(index).await;
@@ -1508,12 +1663,14 @@ impl Worker {
         self.queue.index = Some(index);
         self.queue.position_ms = 0;
         self.queue.ended = false;
+        let prune = index.saturating_sub(PLAYED_TRACK_WINDOW);
+        self.queue.prune(prune);
         if let Err(error) = self
             .store
-            .set_playback_state(self.queue.tracks.clone(), index, 0)
+            .set_playback_state(self.queue.tracks.clone(), index - prune, 0)
             .await
         {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         self.maybe_prefetch_autoplay();
     }
@@ -1527,7 +1684,7 @@ impl Worker {
         }
         self.queue.position_ms = position_ms;
         if let Err(error) = self.store.update_playback_position(position_ms).await {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         Ok(())
     }
@@ -1550,13 +1707,13 @@ impl Worker {
     }
 
     async fn shutdown(&mut self) {
-        self.abort_account_work();
+        self.abort_account_work().await;
         abort_task(&mut self.session.authorization);
         abort_task(&mut self.connection.connect);
         if let Some(task) = self.session.logout.take()
             && let Err(error) = task.await
         {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
         }
         self.connection.abort_attempts();
         self.connection.disconnect();
@@ -1570,34 +1727,41 @@ impl Worker {
                 self.connection.adopt(player, &self.events);
                 self.playback_credentials_invalidated = false;
                 if let Err(error) = self.store.set_playback_credentials_invalidated(false).await {
-                    send_error(&self.events, error);
+                    send_error(&self.events, error).await;
                 }
-                let _ = self.events.send(BackendEvent::PlaybackReady);
+                let _ = self.events.send(BackendEvent::PlaybackReady).await;
                 if let Some((tracks, index)) = self.connection.pending_play.take() {
                     if let Err(error) = self.play_context(tracks, index).await {
-                        send_error(&self.events, error);
+                        send_error(&self.events, error).await;
                     }
                 } else if self.connection.connect_restoring {
-                    let _ = self.events.send(BackendEvent::PlaybackReconnected);
+                    let _ = self.events.send(BackendEvent::PlaybackReconnected).await;
                 } else if let Err(error) = restore_saved_playback(
                     &self.connection.player,
                     &self.queue.tracks,
                     self.queue.index,
                     self.queue.position_ms,
                     &self.events,
-                ) {
-                    send_error(&self.events, error);
+                )
+                .await
+                {
+                    send_error(&self.events, error).await;
                 }
             }
             Some(Ok(Err(error))) => {
-                self.connection.fail_pending_play(&error, &self.events);
+                self.connection
+                    .fail_pending_play(&error, &self.events)
+                    .await;
                 let _ = self
                     .events
-                    .send(BackendEvent::PlaybackFailed(error.to_string()));
+                    .send(BackendEvent::PlaybackFailed(error.to_string()))
+                    .await;
             }
             Some(Err(error)) => {
-                self.connection.fail_pending_play(&error, &self.events);
-                send_error(&self.events, error);
+                self.connection
+                    .fail_pending_play(&error, &self.events)
+                    .await;
+                send_error(&self.events, error).await;
             }
             None => {}
         }
@@ -1612,15 +1776,15 @@ impl Worker {
                 for track in tracks {
                     match self.store.set_favorite(track, true).await {
                         Ok(()) => changed = true,
-                        Err(error) => send_error(&self.events, error),
+                        Err(error) => send_error(&self.events, error).await,
                     }
                 }
                 if changed {
                     send_local_state(&self.store, &self.events).await;
                 }
             }
-            Some(Ok(Err(error))) => send_error(&self.events, error),
-            Some(Err(error)) => send_error(&self.events, error),
+            Some(Ok(Err(error))) => send_error(&self.events, error).await,
+            Some(Err(error)) => send_error(&self.events, error).await,
             None => {}
         }
     }
@@ -1634,25 +1798,34 @@ impl Worker {
                     Ok(()) => {
                         self.queue.tracks = tracks;
                         self.commit_loaded_queue(0).await;
-                        let _ = self.events.send(BackendEvent::RadioStarted { request_id });
+                        let _ = self
+                            .events
+                            .send(BackendEvent::RadioStarted { request_id })
+                            .await;
                     }
                     Err(error) => {
-                        let _ = self.events.send(BackendEvent::RadioFailed {
-                            request_id,
-                            error: error.to_string(),
-                        });
-                        let _ = self.events.send(BackendEvent::PlaybackSettled);
+                        let _ = self
+                            .events
+                            .send(BackendEvent::RadioFailed {
+                                request_id,
+                                error: error.to_string(),
+                            })
+                            .await;
+                        let _ = self.events.send(BackendEvent::PlaybackSettled).await;
                     }
                 }
             }
             Some(Ok((request_id, Err(error)))) => {
-                let _ = self.events.send(BackendEvent::RadioFailed {
-                    request_id,
-                    error: error.to_string(),
-                });
-                let _ = self.events.send(BackendEvent::PlaybackSettled);
+                let _ = self
+                    .events
+                    .send(BackendEvent::RadioFailed {
+                        request_id,
+                        error: error.to_string(),
+                    })
+                    .await;
+                let _ = self.events.send(BackendEvent::PlaybackSettled).await;
             }
-            Some(Err(error)) => send_error(&self.events, error),
+            Some(Err(error)) => send_error(&self.events, error).await,
             None => {}
         }
     }
@@ -1665,11 +1838,11 @@ impl Worker {
         match authorization {
             Some(Ok((generation, Ok(success)))) => {
                 if let Err(error) = self.store.set_oauth_credentials_invalidated(false).await {
-                    send_error(&self.events, error);
+                    send_error(&self.events, error).await;
                 }
                 self.account_generation = generation;
                 self.catalog_generation.store(generation, Ordering::Release);
-                self.abort_account_work();
+                self.abort_account_work().await;
                 self.catalog.seed_fingerprint(None);
                 self.start_account_loads().await;
                 if let Some(request) = success.playback {
@@ -1679,24 +1852,25 @@ impl Worker {
             Some(Ok((_, Err(error)))) => {
                 let _ = self
                     .events
-                    .send(BackendEvent::AuthorizationFailed(error.to_string()));
+                    .send(BackendEvent::AuthorizationFailed(error.to_string()))
+                    .await;
             }
-            Some(Err(error)) => send_error(&self.events, error),
+            Some(Err(error)) => send_error(&self.events, error).await,
             None => {}
         }
     }
 
-    fn finish_logout(&mut self, logout: Finished<Result<()>>) {
+    async fn finish_logout(&mut self, logout: Finished<Result<()>>) {
         self.session.logout = None;
         match logout {
             Some(Ok(Ok(()))) => {
-                let _ = self.events.send(BackendEvent::LoggedOut);
+                let _ = self.events.send(BackendEvent::LoggedOut).await;
             }
             Some(Ok(Err(error))) => {
-                let _ = self.events.send(BackendEvent::LoggedOut);
-                send_error(&self.events, error);
+                let _ = self.events.send(BackendEvent::LoggedOut).await;
+                send_error(&self.events, error).await;
             }
-            Some(Err(error)) => send_error(&self.events, error),
+            Some(Err(error)) => send_error(&self.events, error).await,
             None => {}
         }
     }
@@ -1717,15 +1891,15 @@ impl Worker {
 
     /// Stops every task tied to the signed-in account: catalog loads, the
     /// favorite refresh, and radio.
-    fn abort_account_work(&mut self) {
+    async fn abort_account_work(&mut self) {
         self.catalog.abort_all();
         self.favorites.abort();
-        self.radio.cancel(&self.events);
+        self.radio.cancel(&self.events).await;
         abort_task(&mut self.autoplay.task);
     }
 
     /// Drops the live playback session and forgets the queue.
-    fn stop_playback_session(&mut self) {
+    async fn stop_playback_session(&mut self) {
         self.connection.pending_play = None;
         self.connection.disconnect();
         abort_task(&mut self.connection.reconnect);
@@ -1797,7 +1971,7 @@ impl Worker {
                 return;
             }
             Some(Err(error)) => {
-                send_error(&self.events, error);
+                send_error(&self.events, error).await;
                 return;
             }
             None => return,
@@ -1823,20 +1997,20 @@ impl Worker {
             Ok(preferences) if !preferences.autoplay => return,
             Ok(_) => {}
             Err(error) => {
-                send_error(&self.events, error);
+                send_error(&self.events, error).await;
                 return;
             }
         }
         let additions: Vec<Track> = {
-            let known: HashSet<&str> = self
+            let mut known: HashSet<String> = self
                 .queue
                 .tracks
                 .iter()
-                .map(|track| track.source_id.as_str())
+                .map(|track| track.source_id.clone())
                 .collect();
             tracks
                 .into_iter()
-                .filter(|track| !known.contains(track.source_id.as_str()))
+                .filter(|track| known.insert(track.source_id.clone()))
                 .collect()
         };
         if additions.is_empty() {
@@ -1849,14 +2023,17 @@ impl Worker {
         updated.extend(additions);
         let ended = self.queue.ended;
         if let Err(error) = self.replace_queue(updated, index).await {
-            send_error(&self.events, error);
+            send_error(&self.events, error).await;
             return;
         }
         if ended {
             // The song outran the fetch: continue into the extension rather
             // than leaving playback parked on the ended state.
-            if let Err(error) = self.load_queue_track(index + 1).await {
-                send_error(&self.events, error);
+            if let Err(error) = self
+                .load_queue_track(self.queue.index.unwrap_or(0) + 1)
+                .await
+            {
+                send_error(&self.events, error).await;
             }
         }
     }
@@ -1874,11 +2051,14 @@ impl Worker {
             .is_some_and(|configuration| configuration.source == ClientIdSource::Environment)
     }
 
-    fn send_configuration_failed(&self, generation: u64, error: impl std::fmt::Display) {
-        let _ = self.events.send(BackendEvent::SpotifyConfigurationFailed {
-            generation,
-            error: error.to_string(),
-        });
+    async fn send_configuration_failed(&self, generation: u64, error: impl std::fmt::Display) {
+        let _ = self
+            .events
+            .send(BackendEvent::SpotifyConfigurationFailed {
+                generation,
+                error: error.to_string(),
+            })
+            .await;
     }
 }
 
@@ -1895,14 +2075,30 @@ struct PlayQueue {
 }
 
 impl PlayQueue {
+    fn prune(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.tracks.drain(..count);
+        self.index = self.index.map(|index| index - count);
+        // Vec::drain retains capacity; release a formerly huge played playlist.
+        if self.tracks.capacity() > self.tracks.len().saturating_mul(2) {
+            self.tracks.shrink_to_fit();
+        }
+    }
+
     fn from_snapshot(snapshot: Option<PlaybackSnapshot>) -> Self {
         match snapshot {
-            Some(snapshot) => Self {
-                tracks: snapshot.tracks,
-                index: Some(snapshot.index),
-                position_ms: snapshot.position_ms,
-                ended: false,
-            },
+            Some(snapshot) => {
+                let mut queue = Self {
+                    tracks: snapshot.tracks,
+                    index: Some(snapshot.index),
+                    position_ms: snapshot.position_ms,
+                    ended: false,
+                };
+                queue.prune(snapshot.index.saturating_sub(PLAYED_TRACK_WINDOW));
+                queue
+            }
             None => Self::default(),
         }
     }
@@ -1951,17 +2147,12 @@ struct FavoriteRefresh {
 }
 
 impl FavoriteRefresh {
-    async fn start(
-        &mut self,
-        store: &BlockingStore,
-        spotify: Spotify,
-        events: &UnboundedSender<BackendEvent>,
-    ) {
+    async fn start(&mut self, store: &BlockingStore, spotify: Spotify, events: &EventSender) {
         self.abort();
         let favorites = match store.favorites().await {
             Ok(favorites) => favorites,
             Err(error) => {
-                send_error(events, error);
+                send_error(events, error).await;
                 return;
             }
         };
@@ -2011,15 +2202,15 @@ struct Autoplay {
 }
 
 impl Radio {
-    fn start(
+    async fn start(
         &mut self,
         request_id: u64,
         seed: Track,
         player: Option<Playback>,
         spotify: Spotify,
-        events: &UnboundedSender<BackendEvent>,
+        events: &EventSender,
     ) {
-        self.cancel(events);
+        self.cancel(events).await;
         self.request_id = Some(request_id);
         self.task = Some(tokio::spawn(async move {
             let result = tokio::time::timeout(Duration::from_secs(20), async {
@@ -2038,10 +2229,12 @@ impl Radio {
         }));
     }
 
-    fn cancel(&mut self, events: &UnboundedSender<BackendEvent>) {
+    async fn cancel(&mut self, events: &EventSender) {
         abort_task(&mut self.task);
         if let Some(request_id) = self.request_id.take() {
-            let _ = events.send(BackendEvent::RadioCancelled { request_id });
+            let _ = events
+                .send(BackendEvent::RadioCancelled { request_id })
+                .await;
         }
     }
 }
@@ -2080,7 +2273,7 @@ impl CatalogFetches {
         store: BlockingStore,
         generation: u64,
         current_generation: Arc<AtomicU64>,
-        events: UnboundedSender<BackendEvent>,
+        events: EventSender,
     ) {
         abort_task(&mut self.library);
         self.library = Some(spawn_library_load(
@@ -2190,11 +2383,7 @@ impl PlaybackConnection {
     }
 
     /// Reports a held play as failed once the connection it waited on did.
-    fn fail_pending_play(
-        &mut self,
-        error: &dyn std::fmt::Display,
-        events: &UnboundedSender<BackendEvent>,
-    ) {
+    async fn fail_pending_play(&mut self, error: &dyn std::fmt::Display, events: &EventSender) {
         let Some((tracks, index)) = self.pending_play.take() else {
             return;
         };
@@ -2202,14 +2391,16 @@ impl PlaybackConnection {
             .get(index)
             .and_then(|track| track.spotify_uri.clone())
             .unwrap_or_default();
-        let _ = events.send(BackendEvent::TrackFailed {
-            spotify_uri,
-            error: format!("Spotify playback is not connected: {error}"),
-        });
-        let _ = events.send(BackendEvent::PlaybackSettled);
+        let _ = events
+            .send(BackendEvent::TrackFailed {
+                spotify_uri,
+                error: format!("Spotify playback is not connected: {error}"),
+            })
+            .await;
+        let _ = events.send(BackendEvent::PlaybackSettled).await;
     }
 
-    fn adopt(&mut self, player: Playback, events: &UnboundedSender<BackendEvent>) {
+    fn adopt(&mut self, player: Playback, events: &EventSender) {
         self.observer = Some(observe_playback(&player, events));
         self.player = Some(player);
     }
@@ -2233,7 +2424,7 @@ impl PlaybackConnection {
 
     /// Starts a reconnect attempt when the session dropped, unless one is
     /// already in flight.
-    fn reconnect_if_dead(&mut self, events: &UnboundedSender<BackendEvent>) {
+    async fn reconnect_if_dead(&mut self, events: &EventSender) {
         let session_dropped = self.reconnect_pending
             || self
                 .player
@@ -2246,7 +2437,7 @@ impl PlaybackConnection {
         if self.reconnect.is_none() {
             log::info!("playback: connection lost, reconnecting");
             self.disconnect();
-            let _ = events.send(BackendEvent::PlaybackReconnecting);
+            let _ = events.send(BackendEvent::PlaybackReconnecting).await;
             self.reconnect = Some(tokio::spawn(async {
                 tokio::time::timeout(Duration::from_secs(15), Playback::reconnect())
                     .await
@@ -2255,10 +2446,10 @@ impl PlaybackConnection {
         }
     }
 
-    fn finish_reconnect(
+    async fn finish_reconnect(
         &mut self,
         reconnected: Finished<Result<Playback>>,
-        events: &UnboundedSender<BackendEvent>,
+        events: &EventSender,
     ) {
         self.reconnect = None;
         match reconnected {
@@ -2266,16 +2457,18 @@ impl PlaybackConnection {
                 log::info!("playback: reconnected");
                 self.adopt(player, events);
                 self.reconnect_pending = false;
-                let _ = events.send(BackendEvent::PlaybackReconnected);
+                let _ = events.send(BackendEvent::PlaybackReconnected).await;
             }
             Some(Ok(Err(error))) => {
                 log::warn!("playback: reconnect attempt failed: {error}");
-                self.fail_pending_play(&error, events);
-                let _ = events.send(BackendEvent::PlaybackFailed(format!(
-                    "Spotify playback disconnected; reconnecting: {error}"
-                )));
+                self.fail_pending_play(&error, events).await;
+                let _ = events
+                    .send(BackendEvent::PlaybackFailed(format!(
+                        "Spotify playback disconnected; reconnecting: {error}"
+                    )))
+                    .await;
             }
-            Some(Err(error)) => send_error(events, error),
+            Some(Err(error)) => send_error(events, error).await,
             None => {}
         }
     }
@@ -2367,7 +2560,7 @@ fn spawn_library_load(
     store: BlockingStore,
     generation: u64,
     current_generation: Arc<AtomicU64>,
-    events: UnboundedSender<BackendEvent>,
+    events: EventSender,
     fingerprint: SharedFingerprint,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -2378,10 +2571,12 @@ fn spawn_library_load(
                 return;
             };
             if current_generation.load(Ordering::Acquire) == generation {
-                let _ = events.send(BackendEvent::ProfileLoaded {
-                    generation,
-                    profile,
-                });
+                let _ = events
+                    .send(BackendEvent::ProfileLoaded {
+                        generation,
+                        profile,
+                    })
+                    .await;
             }
         };
         let library_load = async {
@@ -2398,7 +2593,9 @@ fn spawn_library_load(
                 // cache that is already on screen.
                 Ok(Ok(ProbedLibrary::Unchanged)) => {
                     log::info!("library: cache matches Spotify");
-                    let _ = events.send(BackendEvent::LibraryUnchanged { generation });
+                    let _ = events
+                        .send(BackendEvent::LibraryUnchanged { generation })
+                        .await;
                 }
                 Ok(Ok(ProbedLibrary::Changed {
                     contents: (liked_tracks, playlists),
@@ -2421,33 +2618,41 @@ fn spawn_library_load(
                                 playlists.len()
                             );
                             commit_fingerprint(&fingerprint, probed);
-                            let _ = events.send(BackendEvent::LibraryLoaded {
-                                generation,
-                                liked_tracks,
-                                playlists,
-                            });
-                            let _ = events.send(BackendEvent::CatalogReady { generation });
+                            let _ = events
+                                .send(BackendEvent::LibraryLoaded {
+                                    generation,
+                                    liked_tracks,
+                                    playlists,
+                                })
+                                .await;
+                            let _ = events.send(BackendEvent::CatalogReady { generation }).await;
                         }
                         Ok(None) => {}
                         Err(error) => {
-                            let _ = events.send(BackendEvent::CatalogFailed {
-                                generation,
-                                error: error.to_string(),
-                            });
+                            let _ = events
+                                .send(BackendEvent::CatalogFailed {
+                                    generation,
+                                    error: error.to_string(),
+                                })
+                                .await;
                         }
                     }
                 }
                 Ok(Err(error)) => {
-                    let _ = events.send(BackendEvent::CatalogFailed {
-                        generation,
-                        error: error.to_string(),
-                    });
+                    let _ = events
+                        .send(BackendEvent::CatalogFailed {
+                            generation,
+                            error: error.to_string(),
+                        })
+                        .await;
                 }
                 Err(_) => {
-                    let _ = events.send(BackendEvent::CatalogFailed {
-                        generation,
-                        error: "Spotify library request timed out".to_owned(),
-                    });
+                    let _ = events
+                        .send(BackendEvent::CatalogFailed {
+                            generation,
+                            error: "Spotify library request timed out".to_owned(),
+                        })
+                        .await;
                 }
             }
         };
@@ -2522,10 +2727,7 @@ async fn logout_account(store: BlockingStore, spotify: Spotify) -> Result<()> {
     }
 }
 
-fn observe_playback(
-    player: &Playback,
-    events: &UnboundedSender<BackendEvent>,
-) -> tokio::task::JoinHandle<()> {
+fn observe_playback(player: &Playback, events: &EventSender) -> tokio::task::JoinHandle<()> {
     let mut player_events = player.events();
     let event_sender = events.clone();
     tokio::spawn(async move {
@@ -2539,10 +2741,12 @@ fn observe_playback(
                     position_ms,
                     ..
                 } => {
-                    let _ = event_sender.send(BackendEvent::PositionChanged {
-                        spotify_uri: track_id.to_string(),
-                        position_ms,
-                    });
+                    let _ = event_sender
+                        .send_ordered(BackendEvent::PositionChanged {
+                            spotify_uri: track_id.to_string(),
+                            position_ms,
+                        })
+                        .await;
                     Some(BackendEvent::Playing {
                         spotify_uri: track_id.to_string(),
                     })
@@ -2552,10 +2756,12 @@ fn observe_playback(
                     position_ms,
                     ..
                 } => {
-                    let _ = event_sender.send(BackendEvent::PositionChanged {
-                        spotify_uri: track_id.to_string(),
-                        position_ms,
-                    });
+                    let _ = event_sender
+                        .send_ordered(BackendEvent::PositionChanged {
+                            spotify_uri: track_id.to_string(),
+                            position_ms,
+                        })
+                        .await;
                     Some(BackendEvent::Paused {
                         spotify_uri: track_id.to_string(),
                     })
@@ -2588,7 +2794,7 @@ fn observe_playback(
                 _ => None,
             };
             if let Some(event) = event {
-                let _ = event_sender.send(event);
+                let _ = event_sender.send(event).await;
             }
         }
     })
@@ -2598,7 +2804,7 @@ async fn load_context_track(
     playback: &Option<Playback>,
     tracks: &[Track],
     index: usize,
-    events: &UnboundedSender<BackendEvent>,
+    events: &EventSender,
 ) -> Result<()> {
     let track = tracks
         .get(index)
@@ -2611,18 +2817,18 @@ async fn load_context_track(
     let player = playback
         .as_ref()
         .context("Spotify playback is not connected")?;
-    send_playback_context(tracks, index, events);
+    send_playback_context(tracks, index, events).await;
     player.load(spotify_uri, true, 0);
     Ok(())
 }
 
-fn restore_context_track(
+async fn restore_context_track(
     playback: &Option<Playback>,
     tracks: &[Track],
     index: Option<usize>,
     position_ms: u32,
     playing: bool,
-    events: &UnboundedSender<BackendEvent>,
+    events: &EventSender,
 ) -> Result<()> {
     let index = index.context("playback context is not available")?;
     let track = tracks
@@ -2636,39 +2842,43 @@ fn restore_context_track(
     let player = playback
         .as_ref()
         .context("Spotify playback is not connected")?;
-    send_playback_context(tracks, index, events);
+    send_playback_context(tracks, index, events).await;
     player.load(spotify_uri, playing, position_ms);
     Ok(())
 }
 
-fn restore_saved_playback(
+async fn restore_saved_playback(
     playback: &Option<Playback>,
     tracks: &[Track],
     index: Option<usize>,
     position_ms: u32,
-    events: &UnboundedSender<BackendEvent>,
+    events: &EventSender,
 ) -> Result<()> {
     if index.is_none() {
         return Ok(());
     }
-    restore_context_track(playback, tracks, index, position_ms, false, events)
+    restore_context_track(playback, tracks, index, position_ms, false, events).await
 }
 
-fn send_playback_context(tracks: &[Track], index: usize, events: &UnboundedSender<BackendEvent>) {
+async fn send_playback_context(tracks: &[Track], index: usize, events: &EventSender) {
     if let Some(current) = tracks.get(index) {
-        let _ = events.send(BackendEvent::PlaybackContext {
-            current: current.clone(),
-            next: tracks.get(index + 1..).unwrap_or_default().to_vec(),
-        });
+        let _ = events
+            .send(BackendEvent::PlaybackContext {
+                current: current.clone(),
+                next: tracks.get(index + 1..).unwrap_or_default().to_vec(),
+            })
+            .await;
     }
 }
 
-fn send_error(events: &UnboundedSender<BackendEvent>, error: impl std::fmt::Display) {
-    let _ = events.send(BackendEvent::Error(error.to_string()));
+async fn send_error(events: &EventSender, error: impl std::fmt::Display) {
+    let _ = events.send(BackendEvent::Error(error.to_string())).await;
 }
 
-fn send_fatal_error(events: &UnboundedSender<BackendEvent>, error: impl std::fmt::Display) {
-    let _ = events.send(BackendEvent::FatalError(error.to_string()));
+async fn send_fatal_error(events: &EventSender, error: impl std::fmt::Display) {
+    let _ = events
+        .send(BackendEvent::FatalError(error.to_string()))
+        .await;
 }
 
 fn favorite_needs_catalog_refresh(track: &Track) -> bool {
@@ -2703,16 +2913,18 @@ fn build_radio_context(seed: Track, recommendations: Vec<Track>) -> Result<Vec<T
     Ok(tracks)
 }
 
-async fn send_local_state(store: &BlockingStore, events: &UnboundedSender<BackendEvent>) {
+async fn send_local_state(store: &BlockingStore, events: &EventSender) {
     match store.local_state().await {
         Ok((favorites, pinned_playlists, recently_played)) => {
-            let _ = events.send(BackendEvent::LocalStateLoaded {
-                favorites,
-                pinned_playlists,
-                recently_played,
-            });
+            let _ = events
+                .send(BackendEvent::LocalStateLoaded {
+                    favorites,
+                    pinned_playlists,
+                    recently_played,
+                })
+                .await;
         }
-        Err(error) => send_error(events, error),
+        Err(error) => send_error(events, error).await,
     }
 }
 
@@ -2739,6 +2951,166 @@ mod tests {
             duration_ms: 180_000,
             artwork_url: None,
         }
+    }
+
+    #[tokio::test]
+    async fn event_bridge_coalesces_ticks_and_preserves_pause_position() {
+        let (_shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (sender, mut events) = super::event_channel(shutdown_receiver);
+        for position_ms in 0..100_000 {
+            sender
+                .send(BackendEvent::PositionChanged {
+                    spotify_uri: "track".into(),
+                    position_ms,
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(sender.reliable.capacity(), super::EVENT_CAPACITY);
+        assert!(matches!(
+            events.recv().await,
+            Some(BackendEvent::PositionChanged {
+                position_ms: 99_999,
+                ..
+            })
+        ));
+        assert!(events.try_recv().is_err());
+        sender
+            .send(BackendEvent::PositionChanged {
+                spotify_uri: "track".into(),
+                position_ms: 100_000,
+            })
+            .await
+            .unwrap();
+        sender
+            .send_ordered(BackendEvent::PositionChanged {
+                spotify_uri: "track".into(),
+                position_ms: 100_001,
+            })
+            .await
+            .unwrap();
+        sender
+            .send(BackendEvent::Paused {
+                spotify_uri: "track".into(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.recv().await,
+            Some(BackendEvent::PositionChanged {
+                position_ms: 100_001,
+                ..
+            })
+        ));
+        assert!(matches!(
+            events.recv().await,
+            Some(BackendEvent::Paused { .. })
+        ));
+        assert!(events.try_recv().is_err());
+        // Even after its sender closes, the final tick must remain available.
+        sender
+            .send(BackendEvent::PositionChanged {
+                spotify_uri: "track".into(),
+                position_ms: 100_002,
+            })
+            .await
+            .unwrap();
+        drop(sender);
+        assert!(matches!(
+            events.recv().await,
+            Some(BackendEvent::PositionChanged {
+                position_ms: 100_002,
+                ..
+            })
+        ));
+        assert!(events.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn full_event_bridge_waits_without_dropping_events_and_shutdown_cancels_wait() {
+        let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (sender, mut events) = super::event_channel(shutdown_receiver);
+        for _ in 0..super::EVENT_CAPACITY {
+            sender.send(BackendEvent::SetupRequired).await.unwrap();
+        }
+        let send = sender.send(BackendEvent::QueueEnded);
+        tokio::pin!(send);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(5), &mut send)
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            events.recv().await,
+            Some(BackendEvent::SetupRequired)
+        ));
+        send.await.unwrap();
+        for _ in 1..super::EVENT_CAPACITY {
+            assert!(matches!(
+                events.recv().await,
+                Some(BackendEvent::SetupRequired)
+            ));
+        }
+        assert!(matches!(
+            events.recv().await,
+            Some(BackendEvent::QueueEnded)
+        ));
+        for _ in 0..super::EVENT_CAPACITY {
+            sender.send(BackendEvent::SetupRequired).await.unwrap();
+        }
+        let send = sender.send(BackendEvent::QueueEnded);
+        tokio::pin!(send);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(5), &mut send)
+                .await
+                .is_err()
+        );
+        shutdown.send(true).unwrap();
+        assert!(send.await.is_err());
+    }
+
+    #[test]
+    fn autoplay_keeps_only_fifty_played_tracks_over_a_long_session() {
+        let mut queue = super::PlayQueue::default();
+        for id in 0..10_000 {
+            let mut track = favorite();
+            track.source_id = id.to_string();
+            queue.tracks.push(track);
+            let index = queue.tracks.len() - 1;
+            queue.index = Some(index);
+            queue.prune(index.saturating_sub(super::PLAYED_TRACK_WINDOW));
+            assert!(queue.tracks.len() <= 51); // 50 previous entries + current.
+        }
+        assert_eq!(queue.index, Some(50));
+        assert_eq!(queue.tracks.first().unwrap().source_id, "9949");
+        assert_eq!(queue.tracks.last().unwrap().source_id, "9999");
+    }
+
+    #[test]
+    fn restoring_a_large_old_queue_trims_only_played_tracks() {
+        let tracks: Vec<_> = (0..500)
+            .map(|id| {
+                let mut track = favorite();
+                track.source_id = id.to_string();
+                track
+            })
+            .collect();
+        let queue = super::PlayQueue::from_snapshot(Some(crate::storage::PlaybackSnapshot {
+            tracks: tracks.clone(),
+            index: 400,
+            position_ms: 12_345,
+        }));
+        assert_eq!(queue.index, Some(50));
+        assert_eq!(queue.position_ms, 12_345);
+        assert_eq!(queue.tracks, tracks[350..]);
+        assert_eq!(queue.tracks[50].source_id, "400");
+        let store = Store::in_memory().unwrap();
+        store
+            .set_playback_state(&queue.tracks, 50, queue.position_ms)
+            .unwrap();
+        let restored = super::PlayQueue::from_snapshot(store.playback_state().unwrap());
+        assert_eq!(restored.tracks, queue.tracks);
+        assert_eq!(restored.index, queue.index);
     }
 
     #[test]
@@ -2886,8 +3258,9 @@ mod tests {
         connection.hold_play(vec![favorite()], 0);
         assert!(connection.pending_play.is_some());
 
-        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
-        connection.fail_pending_play(&"no network", &events);
+        let (_shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (events, mut received) = super::event_channel(shutdown_receiver);
+        connection.fail_pending_play(&"no network", &events).await;
         assert!(connection.pending_play.is_none());
         assert!(matches!(
             received.try_recv(),

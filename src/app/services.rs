@@ -17,6 +17,8 @@ pub(super) struct AppServices {
     image_cache: Entity<image_cache::BoundedImageCache>,
     brand_mark: Arc<gpui_kit::Image>,
     media_controls: Option<media_controls::SystemMediaControls>,
+    discord_config: crate::discord::Config,
+    discord: Option<crate::discord::Presence>,
     /// The window currently showing these services, if one is open.
     root: Option<gpui_kit::WeakEntity<Workspace>>,
     /// The open main and sign-in windows. Slots are cleared when gpui reports
@@ -60,6 +62,8 @@ impl AppServices {
                 include_bytes!("../../assets/cadence-mark.png").to_vec(),
             )),
             media_controls: None,
+            discord_config: crate::discord::Config::default(),
+            discord: None,
             root: None,
             main_window: None,
             onboarding_window: None,
@@ -97,6 +101,7 @@ impl AppServices {
             if let Some(controls) = services.media_controls.as_mut() {
                 controls.sync(player.read(cx));
             }
+            services.publish_discord(cx);
             cx.set_global(services);
         })
         .detach();
@@ -114,9 +119,25 @@ impl AppServices {
             }
         })
         .detach();
-        cx.observe(&session, |_, cx| windows::sync_windows(cx))
-            .detach();
+        cx.observe(&session, |_, cx| {
+            let mut services = cx.remove_global::<Self>();
+            services.publish_discord(cx);
+            cx.set_global(services);
+            windows::sync_windows(cx);
+        })
+        .detach();
         let media_controls = media_controls::SystemMediaControls::attach(player_for_media, cx);
+        let discord_config = store
+            .as_ref()
+            .and_then(|store| store.discord_config().ok())
+            .unwrap_or_default();
+        let discord = if discord_config.enabled {
+            crate::discord::Presence::start(discord_config.application_id.clone())
+                .map_err(|error| log::warn!("could not enable Discord presence: {error}"))
+                .ok()
+        } else {
+            None
+        };
         cx.set_global(Self {
             backend: Some(backend),
             player,
@@ -125,6 +146,8 @@ impl AppServices {
             image_cache,
             brand_mark,
             media_controls,
+            discord_config,
+            discord,
             root: None,
             main_window: None,
             onboarding_window: None,
@@ -139,6 +162,59 @@ impl AppServices {
         Self::pump(events, cx);
         Self::poll_library(cx);
         handle
+    }
+
+    pub(super) fn discord_config(cx: &App) -> &crate::discord::Config {
+        &cx.global::<Self>().discord_config
+    }
+
+    pub(super) fn set_discord_config(
+        config: crate::discord::Config,
+        cx: &mut App,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !config.enabled || crate::discord::valid_application_id(&config.application_id),
+            "enter a valid Discord Application ID"
+        );
+        let mut services = cx.remove_global::<Self>();
+        let result = (|| -> anyhow::Result<()> {
+            let replacement = if config.enabled
+                && (services.discord.is_none()
+                    || services.discord_config.application_id != config.application_id)
+            {
+                Some(crate::discord::Presence::start(
+                    config.application_id.clone(),
+                )?)
+            } else {
+                None
+            };
+            services
+                .store
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("settings storage is unavailable"))?
+                .set_discord_config(&config)?;
+            if !config.enabled {
+                services.discord = None;
+            } else if let Some(replacement) = replacement {
+                services.discord = Some(replacement);
+            }
+            services.discord_config = config;
+            services.publish_discord(cx);
+            Ok(())
+        })();
+        cx.set_global(services);
+        result
+    }
+
+    fn publish_discord(&mut self, cx: &App) {
+        if let Some(discord) = self.discord.as_mut() {
+            let player = self.player.read(cx);
+            discord.sync(
+                player.now_playing(),
+                player.playing() && self.session.read(cx).is_ready(),
+                player.position_ms(cx.background_executor().now()),
+            );
+        }
     }
 
     pub(super) fn backend(cx: &App) -> BackendHandle {
@@ -382,6 +458,7 @@ impl AppServices {
     /// Saves the live position and stops the worker thread. The process exits
     /// straight after `applicationWillTerminate:`, so nothing else will.
     fn shutdown(cx: &mut App) {
+        cx.global_mut::<Self>().discord = None;
         let position_ms = Self::player(cx).read(cx).position_snapshot();
         // Stop the worker before writing, both because its shutdown drops any
         // command still queued behind it, and so it cannot write a later

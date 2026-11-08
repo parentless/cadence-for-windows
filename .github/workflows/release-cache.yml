@@ -1,15 +1,6 @@
 name: Release cache
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - rust-toolchain.toml
-      - .cargo/**
-      - .github/workflows/release-cache.yml
-      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -24,8 +15,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         id: cache
         with:
           shared-key: release

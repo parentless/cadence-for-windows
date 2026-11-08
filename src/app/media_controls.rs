@@ -13,12 +13,14 @@ struct Published {
     position_seconds: u64,
 }
 
-/// Publishes now-playing information to macOS and accepts the transport
+/// Publishes now-playing information to the operating system and accepts the transport
 /// commands it sends back, so Cadence can be driven without its window.
 pub(super) struct SystemMediaControls {
     controls: MediaControls,
     published: Option<Published>,
     _command_forwarder: gpui_kit::Task<()>,
+    #[cfg(target_os = "windows")]
+    _media_window: MediaWindow,
 }
 
 impl SystemMediaControls {
@@ -27,19 +29,39 @@ impl SystemMediaControls {
     /// Returns `None` when the platform refuses them, which is not fatal: the
     /// app simply goes without media keys.
     pub(super) fn attach(player: Entity<player::Player>, cx: &mut App) -> Option<Self> {
+        #[cfg(target_os = "windows")]
+        let media_window = MediaWindow::new()
+            .map_err(|error| {
+                log::error!("could not create media control window: {error}");
+            })
+            .ok()?;
         let mut controls = MediaControls::new(PlatformConfig {
             display_name: "Cadence",
             dbus_name: "cadence",
+            #[cfg(not(target_os = "windows"))]
             hwnd: None,
+            #[cfg(target_os = "windows")]
+            hwnd: Some(media_window.0),
         })
         .ok()?;
 
-        let (commands, incoming) = async_channel::unbounded();
+        let (commands, incoming) = async_channel::bounded(64);
+        let saturated = std::sync::atomic::AtomicBool::new(false);
         // The system calls this from its own thread, so hand the event to the
         // foreground executor rather than touching the player here.
         controls
             .attach(move |event| {
-                let _ = commands.send_blocking(event);
+                // Native media callbacks can run on the UI thread. Never block
+                // that thread waiting for the foreground consumer to drain.
+                match commands.try_send(event) {
+                    Ok(()) => saturated.store(false, std::sync::atomic::Ordering::Relaxed),
+                    Err(async_channel::TrySendError::Full(_))
+                        if !saturated.swap(true, std::sync::atomic::Ordering::Relaxed) =>
+                    {
+                        log::warn!("media controls: command queue full; ignoring excess input");
+                    }
+                    Err(_) => {}
+                }
             })
             .ok()?;
 
@@ -55,6 +77,8 @@ impl SystemMediaControls {
             controls,
             published: None,
             _command_forwarder: command_forwarder,
+            #[cfg(target_os = "windows")]
+            _media_window: media_window,
         })
     }
 
@@ -134,6 +158,50 @@ fn apply(event: MediaControlEvent, player: &mut player::Player, cx: &mut Context
         Some(Transport::Previous) => player.previous(cx),
         Some(Transport::Seek(position_ms)) => player.seek(position_ms, cx),
         None => {}
+    }
+}
+
+/// SMTC needs a real HWND that survives closing and reopening the UI. This
+/// hidden top-level window lives on GPUI's UI thread, as do its controls.
+#[cfg(target_os = "windows")]
+struct MediaWindow(windows_sys::Win32::Foundation::HWND);
+
+#[cfg(target_os = "windows")]
+impl MediaWindow {
+    fn new() -> std::io::Result<Self> {
+        use windows_sys::{Win32::UI::WindowsAndMessaging::*, core::w};
+        // STATIC is a system window class; no custom WndProc is needed.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!("Cadence"),
+                WS_OVERLAPPED,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if hwnd.is_null() {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(Self(hwnd))
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for MediaWindow {
+    fn drop(&mut self) {
+        // `controls` is declared before this field, so SMTC detaches first.
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0);
+        }
     }
 }
 

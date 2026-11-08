@@ -27,3 +27,13 @@ CADENCE_UI_BASELINE=/tmp/cadence-reference cargo test --test ui_rendering --lock
 To capture on the CI platform, run **Actions → Regenerate screenshots → Run workflow** on the desired branch. The artifact contains repeatable PNGs, the source revision, environment details and lockfile. It expires after 14 days.
 
 Review the images before replacing `tests/visual/baseline/*.png`, update `manifest.json` with the recorded provenance, then commit the baseline through the usual review process. Approved images stay in the repository so CI does not depend on artifact retention. Regeneration does not prove migration parity or automatically approve a visual change.
+
+To preview the artist header with square, tall and wide deterministic local
+artwork at both window widths and appearances, without replacing reference images:
+
+```sh
+cargo test --test ui_rendering --locked -- --artist-preview
+```
+
+This checks repeatable rendering, asserts a fixed square portrait, and writes images to `target/artist-previews`.
+The artwork is a test pattern; installed builds use the artist's Spotify image.

@@ -45,6 +45,7 @@ pub(super) enum SettingsEvent {
     SetTheme(ThemePreference),
     SetAutoplay(bool),
     SetMascot(MascotPreference),
+    SetDiscord(crate::discord::Config),
 }
 
 /// The settings page: appearance, playback, and the Spotify developer app.
@@ -55,6 +56,9 @@ pub(super) struct Settings {
     /// ring, which also shows after a click.
     autoplay_focus: FocusHandle,
     automatic_updates_focus: FocusHandle,
+    discord_focus: FocusHandle,
+    discord_application_id: Entity<InputState>,
+    discord_error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -62,6 +66,14 @@ impl EventEmitter<SettingsEvent> for Settings {}
 
 impl Settings {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let discord_id = services::AppServices::discord_config(cx)
+            .application_id
+            .clone();
+        let discord_application_id = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Discord Application ID");
+            input.set_value(discord_id, window, cx);
+            input
+        });
         let mascot = services::AppServices::preferences(cx).mascot;
         let mascot_select = cx.new(|cx| {
             SelectState::new(
@@ -81,6 +93,20 @@ impl Settings {
                 cx.emit(SettingsEvent::SetMascot(*mascot));
             },
         )];
+        subscriptions.push(cx.subscribe(
+            &discord_application_id,
+            |this, _, event: &InputEvent, cx| match event {
+                InputEvent::Change => {
+                    this.discord_error = None;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    let enabled = services::AppServices::discord_config(cx).enabled;
+                    this.save_discord(enabled, cx);
+                }
+                _ => {}
+            },
+        ));
         if let Some(status) = updater::status(cx) {
             subscriptions.push(cx.observe(&status, |_, _, cx| cx.notify()));
         }
@@ -89,6 +115,9 @@ impl Settings {
             mascot_select,
             autoplay_focus: cx.focus_handle(),
             automatic_updates_focus: cx.focus_handle(),
+            discord_focus: cx.focus_handle(),
+            discord_application_id,
+            discord_error: None,
             _subscriptions: subscriptions,
         }
     }
@@ -330,8 +359,68 @@ impl Settings {
                                     }),
                             ),
                     )
+                    .child(self.discord_section(palette, window, cx))
                     .child(self.updates_section(palette, window, cx)),
             )
+    }
+
+    fn save_discord(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        // Turning sharing off must always work, even if the field contains
+        // an unfinished edit. Keep the saved ID when disabling the toggle.
+        let saved = services::AppServices::discord_config(cx);
+        let application_id = if !enabled && saved.enabled {
+            saved.application_id.clone()
+        } else {
+            self.discord_application_id
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned()
+        };
+        if (enabled || !application_id.is_empty())
+            && !crate::discord::valid_application_id(&application_id)
+        {
+            self.discord_error = Some("Enter the numeric Application ID from Discord's Developer Portal, not a bot token.".into());
+            cx.notify();
+            return;
+        }
+        self.discord_error = None;
+        cx.emit(SettingsEvent::SetDiscord(crate::discord::Config {
+            enabled,
+            application_id,
+        }));
+        cx.notify();
+    }
+
+    fn discord_section(
+        &self,
+        palette: CadencePalette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let enabled = services::AppServices::discord_config(cx).enabled;
+        div().mt_12()
+            .child(Self::settings_section_header(palette, "Discord", "Optionally show what you're listening to on your Discord profile."))
+            .child(div().mt_4().rounded_2xl().border_1().border_color(rgb(palette.border))
+                .bg(rgb(palette.surface_raised)).p_5()
+                .child(Self::playback_setting_row(palette, "Share listening activity", "Requires Discord desktop. Activity clears while paused or signed out.",
+                    components::focus_ring_around(palette, &self.discord_focus, window, cx,
+                        Switch::new("settings-discord-enabled").focus_ring(false).checked(enabled)
+                            .on_click(cx.listener(|this, enabled: &bool, _, cx| this.save_discord(*enabled, cx))))))
+                .child(div().mt_5().pt_5().border_t_1().border_color(rgb(palette.border))
+                    .child(div().text_xs().text_color(rgb(palette.text)).child("Discord Application ID"))
+                    .child(div().mt_2().flex().gap_3()
+                        .child(Input::new(&self.discord_application_id).id("settings-discord-application-id").flex_1().min_w_0())
+                        .child(components::settings_button(palette, "settings-discord-save", "Save")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let enabled = services::AppServices::discord_config(cx).enabled;
+                                this.save_discord(enabled, cx);
+                            }))))
+                    .child(div().mt_2().text_size(tokens::CAPTION_TEXT).text_color(rgb(palette.text_muted))
+                        .child("Create a Discord application named Cadence and paste its public Application ID. No bot token needed."))
+                    .child(components::settings_button(palette, "settings-discord-portal", "Open Discord Developer Portal")
+                        .mt_3().on_click(|_, _, cx| cx.open_url("https://discord.com/developers/applications")))
+                    .when_some(self.discord_error.clone(), |card, error| card.child(div().mt_2().text_sm().text_color(rgb(palette.text)).child(error)))))
     }
 
     fn updates_section(
@@ -395,13 +484,31 @@ impl Settings {
         let (detail, emphasized) = match check {
             None => ("This build does not update itself.".to_owned(), false),
             Some(UpdateCheck::Unknown) => ("Not checked yet.".to_owned(), false),
+            #[cfg(target_os = "windows")]
+            Some(UpdateCheck::Checking) => ("Checking for updates…".to_owned(), false),
+            #[cfg(target_os = "windows")]
+            Some(UpdateCheck::Downloading) => (
+                "Downloading and verifying the update. Cadence will restart when ready.".to_owned(),
+                false,
+            ),
             Some(UpdateCheck::UpToDate) => ("Up to date.".to_owned(), false),
             Some(UpdateCheck::Available(version)) => {
                 (format!("Cadence {version} is ready to install."), true)
             }
+            #[cfg(target_os = "windows")]
+            Some(UpdateCheck::Failed(error)) => (format!("Update failed: {error}"), false),
             Some(UpdateCheck::Skipped(version)) => (format!("Version {version} skipped."), false),
         };
+        #[cfg(target_os = "windows")]
+        let busy = matches!(
+            check,
+            Some(UpdateCheck::Checking | UpdateCheck::Downloading)
+        );
+        #[cfg(not(target_os = "windows"))]
+        let busy = false;
         let action = match check {
+            #[cfg(target_os = "windows")]
+            Some(UpdateCheck::Checking | UpdateCheck::Downloading) => "Please wait…",
             Some(UpdateCheck::Available(_)) => "Install update",
             _ => "Check for updates",
         };
@@ -437,9 +544,12 @@ impl Settings {
             .when(check.is_some(), |row| {
                 row.child(
                     components::settings_button(palette, "settings-check-updates", action)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(CheckForUpdates), cx)
-                        }),
+                        .when(!busy, |button| {
+                            button.on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(CheckForUpdates), cx)
+                            })
+                        })
+                        .when(busy, |button| button.opacity(0.6)),
                 )
             })
     }

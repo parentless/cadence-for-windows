@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy)]
 enum Scene {
+    Artist,
+    ArtistPortrait,
+    ArtistLandscape,
     Settings,
     SettingsAutoplayOff,
     SettingsMenu,
@@ -106,7 +109,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             ])
             .expect("pinned Inter fonts");
     });
-    let _backend = cx.update(|cx| initialize(cx, theme));
+    let mut backend = cx.update(|cx| initialize(cx, theme));
     let height = 820.;
     let handle = if matches!(scene, Scene::Setup | Scene::SetupFilled) {
         cx.update(|cx| {
@@ -127,6 +130,55 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         let (handle, workspace) = workspace(&mut cx, width, height);
         cx.update(|cx| {
             workspace.update(cx, |workspace, cx| match scene {
+                Scene::Artist | Scene::ArtistPortrait | Scene::ArtistLandscape => {
+                    let (image_width, image_height) = match scene {
+                        Scene::ArtistPortrait => (360, 1080),
+                        Scene::ArtistLandscape => (1080, 360),
+                        _ => (640, 640),
+                    };
+                    let url = "https://fixtures.invalid/artist.png";
+                    let pixels = image::RgbaImage::from_fn(image_width, image_height, |x, y| {
+                        // A local, deterministic artwork fixture; no network or
+                        // copyrighted artist image is needed for layout checks.
+                        let stripe = if (x / 70 + y / 110) % 2 == 0 { 20 } else { 0 };
+                        image::Rgba([
+                            80 + (x * 120 / image_width) as u8,
+                            65 + (y * 120 / image_height) as u8,
+                            140 + stripe,
+                            255,
+                        ])
+                    });
+                    services::AppServices::image_cache(cx).update(cx, |cache, _| {
+                        cache.seed_artist_fixture(
+                            url,
+                            Arc::new(gpui_kit::RenderImage::new([image::Frame::new(pixels)])),
+                        );
+                    });
+                    let reference = model::ArtistRef {
+                        name: "The Midnight".into(),
+                        source_id: Some("fixture-artist".into()),
+                        spotify_uri: None,
+                    };
+                    workspace.open_artist(reference, Route::LikedSongs, cx);
+                    match backend.commands.try_recv().expect("artist request") {
+                        BackendCommand::LoadArtist { respond, .. } => {
+                            respond
+                                .send(Ok((
+                                    model::Artist {
+                                        provider: model::Provider::Spotify,
+                                        source_id: "fixture-artist".into(),
+                                        spotify_uri: None,
+                                        name: "The Midnight".into(),
+                                        artwork_url: Some(url.into()),
+                                    },
+                                    vec![track(0), track(1), track(2)],
+                                    Vec::new(),
+                                )))
+                                .expect("artist fixture reply");
+                        }
+                        command => panic!("unexpected artist command: {command:?}"),
+                    }
+                }
                 Scene::Settings | Scene::SettingsAutoplayOff | Scene::SettingsMenu => {
                     workspace.open_settings(cx);
                     if matches!(scene, Scene::SettingsAutoplayOff) {
@@ -152,13 +204,29 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     settle(&mut cx, handle.into());
     match scene {
         Scene::SearchEntered => {
-            press_key(&mut cx, handle.into(), "cmd-k");
+            press_key(
+                &mut cx,
+                handle.into(),
+                if cfg!(target_os = "macos") {
+                    "cmd-k"
+                } else {
+                    "ctrl-k"
+                },
+            );
             for character in "Blue Train".chars() {
                 press_key(&mut cx, handle.into(), &character.to_string());
             }
         }
         Scene::QueueFocus { open } => {
-            press_key(&mut cx, handle.into(), "cmd-k");
+            press_key(
+                &mut cx,
+                handle.into(),
+                if cfg!(target_os = "macos") {
+                    "cmd-k"
+                } else {
+                    "ctrl-k"
+                },
+            );
             tab_to(&mut cx, handle.into(), "queue-toggle");
             if open {
                 press_key(&mut cx, handle.into(), "space");
@@ -244,6 +312,23 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         .expect("queue pointer state");
         settle(&mut cx, handle.into());
     }
+    if matches!(
+        scene,
+        Scene::Artist | Scene::ArtistPortrait | Scene::ArtistLandscape
+    ) {
+        cx.update_window(handle.into(), |_, window, _| {
+            let bounds = window.find("artist-portrait").bounds();
+            assert_eq!(bounds.size.width, px(160.));
+            assert_eq!(bounds.size.height, px(160.));
+            let backdrop = window.find("artist-backdrop-image").bounds();
+            let header = window.find("artist-header").bounds();
+            assert_eq!(
+                backdrop.size, header.size,
+                "backdrop must cover the full header for every source aspect ratio"
+            );
+        })
+        .expect("square artist portrait");
+    }
     let screenshot = cx
         .capture_screenshot(handle.into())
         .expect("native Metal screenshot");
@@ -320,6 +405,50 @@ pub(crate) fn run() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
+    if std::env::args().any(|argument| argument == "--artist-overlay-preview") {
+        let previews = artifacts.with_file_name("artist-previews");
+        std::fs::create_dir_all(&previews).expect("preview directory");
+        for (layout, width) in [("regular", 1280.), ("compact", 900.)] {
+            let image = capture(Scene::Artist, ThemePreference::Dark, width);
+            let repeated = capture(Scene::Artist, ThemePreference::Dark, width);
+            assert!(
+                compare("artist-overlay-repeat", &image, &repeated, &previews),
+                "overlay preview must repeat exactly"
+            );
+            let path = previews.join(format!("artist-overlay-{layout}-preview.png"));
+            save_artifact(&image, &path);
+            println!("{}", path.display());
+        }
+        return;
+    }
+    if std::env::args().any(|argument| argument == "--artist-preview") {
+        let previews = artifacts.with_file_name("artist-previews");
+        std::fs::create_dir_all(&previews).expect("preview directory");
+        for (theme_name, theme) in [
+            ("light", ThemePreference::Light),
+            ("dark", ThemePreference::Dark),
+        ] {
+            for (layout, width) in [("regular", 1280.), ("compact", 900.)] {
+                for (aspect, scene) in [
+                    ("square", Scene::Artist),
+                    ("portrait", Scene::ArtistPortrait),
+                    ("landscape", Scene::ArtistLandscape),
+                ] {
+                    let image = capture(scene, theme, width);
+                    let repeated = capture(scene, theme, width);
+                    assert!(
+                        compare("artist-repeat", &image, &repeated, &previews),
+                        "artist rendering must repeat exactly"
+                    );
+                    let path =
+                        previews.join(format!("artist-{theme_name}-{layout}-{aspect}-preview.png"));
+                    save_artifact(&image, &path);
+                    println!("{}", path.display());
+                }
+            }
+        }
+        return;
+    }
     if artifacts.exists() {
         std::fs::remove_dir_all(&artifacts).expect("clear previous visual artifacts");
     }

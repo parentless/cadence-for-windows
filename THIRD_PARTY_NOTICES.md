@@ -41,3 +41,12 @@ Copyright (c) 480 Design
 
 Licensed under the
 [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
+
+## GPUI Windows portability patch
+
+The vendored `gpui-pre-windows` 0.3.7 backend is from the Zed project and the
+gpui-pre distribution, licensed under Apache License 2.0. Cadence changes debug
+shader loading to use embedded source instead of the build machine's files.
+Optimized builds keep the original precompiled shader path. The complete
+license is in `vendor/gpui-pre-windows/LICENSE-APACHE` in source distributions
+and `GPUI-WINDOWS-LICENSE.txt` in Windows binary ZIPs.

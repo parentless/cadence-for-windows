@@ -17,10 +17,12 @@ const ACTIONS_MENU_WINDOW_MARGIN: Rems = Rems(0.5);
 
 /// The column header for a track list. Lives beside `TrackRow` so the fixed
 /// columns cannot drift out of step with the rows they label.
-pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> Div {
+pub(super) fn track_list_header(palette: CadencePalette, compact: bool, show_actions: bool) -> Div {
     div()
         .h_10()
         .flex_none()
+        .border_b_1()
+        .border_color(rgb(palette.border))
         .px_3()
         .flex()
         .items_center()
@@ -56,7 +58,9 @@ pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> Div {
                 .pr_2()
                 .child("Time"),
         )
-        .child(div().w(ACTIONS_COLUMN_WIDTH).flex_none())
+        .when(show_actions, |header| {
+            header.child(div().w(ACTIONS_COLUMN_WIDTH).flex_none())
+        })
 }
 
 /// A single line that ellipsizes at the column edge. Wrapping text with a
@@ -69,6 +73,7 @@ fn ellipsized_line() -> Div {
 }
 
 type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type ContextCallback = Box<dyn Fn(&gpui_kit::MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 /// One track in a list.
 ///
@@ -90,6 +95,9 @@ pub(super) struct TrackRow {
     on_play: Option<RowCallback>,
     on_favorite: Option<RowCallback>,
     on_toggle_menu: Option<RowCallback>,
+    on_context_menu: Option<ContextCallback>,
+    context_menu_only: bool,
+    menu_position: Option<gpui_kit::Point<Pixels>>,
 }
 
 impl TrackRow {
@@ -112,6 +120,9 @@ impl TrackRow {
             on_play: None,
             on_favorite: None,
             on_toggle_menu: None,
+            on_context_menu: None,
+            context_menu_only: false,
+            menu_position: None,
         }
     }
 
@@ -154,6 +165,17 @@ impl TrackRow {
         self
     }
 
+    pub(super) fn context_menu(
+        mut self,
+        position: Option<gpui_kit::Point<Pixels>>,
+        handler: impl Fn(&gpui_kit::MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.context_menu_only = true;
+        self.menu_position = position;
+        self.on_context_menu = Some(Box::new(handler));
+        self
+    }
+
     pub(super) fn on_toggle_menu(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -167,6 +189,8 @@ impl RenderOnce for TrackRow {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         let palette = self.palette;
         let index = self.index;
+        let context_menu_only = self.context_menu_only;
+        let menu_position = self.menu_position;
         let rem_size = window.rem_size();
         let row_group: SharedString =
             format!("spotify-track-row:{}:{index}", self.track.source_id).into();
@@ -178,7 +202,7 @@ impl RenderOnce for TrackRow {
             .px_3()
             .rounded_none()
             .justify_start()
-            .border_t_1()
+            .border_b_1()
             .border_color(rgb(palette.border))
             .bg(rgb(if self.current {
                 palette.selection
@@ -285,33 +309,37 @@ impl RenderOnce for TrackRow {
             .child(
                 div()
                     .relative()
-                    .size(ACTIONS_COLUMN_WIDTH)
+                    .when(!context_menu_only, |anchor| {
+                        anchor.size(ACTIONS_COLUMN_WIDTH)
+                    })
                     .flex_none()
-                    .child(
-                        components::button(palette, ("track-actions", index))
-                            .test_support()
-                            .size(ACTIONS_COLUMN_WIDTH)
-                            .rounded_full()
-                            .hover(|style| style.bg(rgb(palette.control)))
-                            .active(|style| style.bg(rgb(palette.control_hover)))
-                            .when(self.menu_open, |button| button.bg(rgb(palette.control)))
-                            .when(!self.menu_open, |button| {
-                                button
-                                    .invisible()
-                                    .group_hover(row_group, |style| style.visible())
-                            })
-                            .child(components::icon(
-                                CadenceIcon::More,
-                                tokens::CONTROL_ICON,
-                                palette.text_primary,
-                            ))
-                            .when_some(self.on_toggle_menu, |button, handler| {
-                                button.on_click(move |event, window, cx| {
-                                    cx.stop_propagation();
-                                    handler(event, window, cx);
+                    .when(!context_menu_only, |anchor| {
+                        anchor.child(
+                            components::button(palette, ("track-actions", index))
+                                .test_support()
+                                .size(ACTIONS_COLUMN_WIDTH)
+                                .rounded_full()
+                                .hover(|style| style.bg(rgb(palette.control)))
+                                .active(|style| style.bg(rgb(palette.control_hover)))
+                                .when(self.menu_open, |button| button.bg(rgb(palette.control)))
+                                .when(!self.menu_open, |button| {
+                                    button
+                                        .invisible()
+                                        .group_hover(row_group, |style| style.visible())
                                 })
-                            }),
-                    )
+                                .child(components::icon(
+                                    CadenceIcon::More,
+                                    tokens::CONTROL_ICON,
+                                    palette.text_primary,
+                                ))
+                                .when_some(self.on_toggle_menu, |button, handler| {
+                                    button.on_click(move |event, window, cx| {
+                                        cx.stop_propagation();
+                                        handler(event, window, cx);
+                                    })
+                                }),
+                        )
+                    })
                     .when_some(self.menu, |anchor, menu| {
                         let menu_offset = point(
                             ACTIONS_COLUMN_WIDTH.to_pixels(rem_size),
@@ -322,11 +350,22 @@ impl RenderOnce for TrackRow {
                             anchored()
                                 .offset(menu_offset)
                                 .anchor(Anchor::TopRight)
+                                .when_some(menu_position, |menu, position| {
+                                    menu.position(position)
+                                        .anchor(Anchor::TopLeft)
+                                        .offset(point(px(0.), px(0.)))
+                                })
                                 .snap_to_window_with_margin(menu_window_margin)
                                 .child(menu),
                         ))
                     }),
             )
+            .when_some(self.on_context_menu, |row, handler| {
+                row.on_mouse_down(gpui_kit::MouseButton::Right, move |event, window, cx| {
+                    cx.stop_propagation();
+                    handler(event, window, cx);
+                })
+            })
             .when_some(self.on_play.filter(|_| !self.current), |row, handler| {
                 row.on_click(handler)
             })
@@ -382,7 +421,7 @@ impl RenderOnce for PlaylistRow {
             .justify_start()
             .gap_3p5()
             .rounded_none()
-            .border_t_1()
+            .border_b_1()
             .border_color(rgb(palette.border))
             .hover(|style| style.bg(rgb(palette.surface_hover)))
             .child(components::artwork(

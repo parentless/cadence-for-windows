@@ -100,23 +100,24 @@ impl Toolbar {
         } else {
             tokens::SEARCH_FIELD_WIDTH
         };
-        components::text_field_frame(palette, &self.search_input, window, cx)
+        components::glass_search_frame(palette, &self.search_input, window, cx)
             .id("search-field")
             .w(width)
             .h_10()
             .justify_start()
             .gap_2p5()
             .text_sm()
-            .text_color(rgb(palette.text_muted))
+            .text_color(rgb(palette.text))
             .child(components::icon(
                 CadenceIcon::Search,
                 tokens::FIELD_ICON,
-                palette.text_muted,
+                palette.text_primary,
             ))
             .child(
                 Input::new(&self.search_input)
                     .id("search-input")
                     .appearance(false)
+                    .text_color(rgb(palette.text_primary))
                     .bordered(false)
                     .focus_bordered(false)
                     .flex_1()
@@ -129,9 +130,14 @@ impl Toolbar {
                     .py_0p5()
                     .rounded_md()
                     .bg(rgb(palette.surface_raised))
+                    .bg(gpui_kit::rgba(0xFFFFFF14))
                     .text_color(rgb(palette.text))
                     .text_size(tokens::CAPTION_TEXT)
-                    .child("⌘ K"),
+                    .child(if cfg!(target_os = "macos") {
+                        "⌘ K"
+                    } else {
+                        "Ctrl K"
+                    }),
             )
     }
 
@@ -251,7 +257,11 @@ impl Toolbar {
 
 impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = appearance::Appearance::palette(cx);
+        let palette = if self.route == Route::Artist {
+            CadencePalette::DARK
+        } else {
+            appearance::Appearance::palette(cx)
+        };
         let compact = is_compact_content_layout(window);
         let profile_name = self.profile_name(cx);
         let profile = self.session.read(cx).profile().cloned();

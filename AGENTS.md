@@ -33,19 +33,11 @@ artifact, review the images, copy them over `tests/visual/baseline/*.png`, updat
 
 ## Releases
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds the app and runs `gh release create` for that tag. Do NOT create the GitHub release manually (`gh release create` or the web UI) after pushing a tag; the release already exists by the time CI finishes publishing, so the workflow fails with "a release with the same tag name already exists".
+Every push to `main` runs `.github/workflows/release.yml`, builds and tests the Windows client, and uploads optimized executable/ZIP/checksum artifacts. A new stable Cargo package version publishes a matching `vMAJOR.MINOR.PATCH` GitHub release. Published versions are immutable; later pushes with the same version keep their artifacts in the workflow run. A matching `v*` tag can also trigger publication.
 
-To cut a release: bump the version, commit, tag `vX.Y.Z`, push the tag, and let CI publish. Versions must be plain `MAJOR.MINOR.PATCH`: packaging derives Sparkle's numeric `CFBundleVersion` from it and refuses pre-release suffixes.
+Do not create the GitHub release manually. The workflow uploads assets to a draft and publishes it only after uploads finish, so installed copies never see incomplete releases. Bump both Cargo.toml and Cargo.lock before releasing an update. Keep versions plain `MAJOR.MINOR.PATCH`.
 
-The workflow also signs the DMG with the Sparkle key from the `SPARKLE_PRIVATE_KEY` secret and publishes `appcast.xml` as a release asset. Installed copies read `https://github.com/infomiho/cadence/releases/latest/download/appcast.xml` and update themselves through the embedded Sparkle framework. `scripts/setup-sparkle-key.sh` creates the key, stores the secret and writes the public key into `assets/Info.plist`. Back the private key up: without it no installed copy accepts an update. The tag message becomes the release notes shown in the update window.
-
-### Release notes format
-
-Put the full notes in the annotated tag message **before** pushing the tag: the workflow copies the tag message into both the GitHub release body (`release.yml`) and the Sparkle `appcast.xml` (`generate-appcast.sh`). `gh release edit` only fixes the GitHub page, never the update window. Check the voice with `gh release view` on a previous release.
-
-- Heading `Cadence X.Y.Z`, then bullets, then `**Full Changelog**: <compare URL>` for the previous tag.
-- One bolded lead-in per user-visible change: `**Music no longer stays paused after dictation.**` Then the behavior, not the code: what the user experienced before, what happens now. No module names, no function names, no jargon.
-- Internal fixes with no user-visible behavior still get a user-facing sentence; keep it to one line.
+Windows builds embed their own GitHub repository as the update feed. Downloads and checksum validation run in the background; installation is initiated in Settings. See `docs/RELEASING.md` for publication and update details. macOS source support remains, but this fork's release workflow does not publish signed DMGs or Sparkle appcasts.
 
 ## Non-Interactive Shell Commands
 

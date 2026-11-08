@@ -1,79 +1,59 @@
-name: Release
+name: Windows release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# One publisher at a time; never cancel a release in the middle of publication.
+concurrency:
+  group: windows-publish
+  cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: macos-15
+  windows:
+    uses: ./.github/workflows/windows.yml
+
+  publish:
+    needs: windows
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
-      KEYCHAIN_PATH: ${{ github.workspace }}/release.keychain-db
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.windows.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          shared-key: release
-          save-if: false
-      - name: Verify version
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: cadence-windows-x86_64
+          path: dist
+      - name: Publish a new version once
+        shell: bash
         run: |
-          cargo_version=$(cargo metadata --format-version 1 --no-deps | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
-          test "v$cargo_version" = "$GITHUB_REF_NAME"
-      - name: Import signing certificate
-        env:
-          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          keychain_password=$(openssl rand -hex 16)
-          certificate="$RUNNER_TEMP/certificate.p12"
-          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 --decode >"$certificate"
-          security create-keychain -p "$keychain_password" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$keychain_password" "$KEYCHAIN_PATH"
-          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
-          identity=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
-          test -n "$identity"
-          echo "CADENCE_CODESIGN_IDENTITY=$identity" >>"$GITHUB_ENV"
-      - name: Build and package
-        run: |
-          cargo build --release --locked
-          ./scripts/package-app.sh release
-      - name: Notarize
-        env:
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: |
-          export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
-          printf '%s' "$APPLE_API_KEY_P8" | base64 --decode >"$APPLE_API_KEY_PATH"
-          ./scripts/notarize.sh dist/*.dmg
-      - name: Generate appcast
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: ./scripts/generate-appcast.sh "$GITHUB_REF_NAME"
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          notes=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
-          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --notes "$notes" --generate-notes
-      - name: Trigger site deploy
-        continue-on-error: true
-        env:
-          COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_WEBHOOK }}
-          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
-        run: |
-          if [ -z "$COOLIFY_WEBHOOK" ] || [ -z "$COOLIFY_TOKEN" ]; then
-            echo "Coolify secrets are not configured, skipping site deploy."
+          set -euo pipefail
+          tag="v$VERSION"
+          existing_draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || true)
+          if [ "$existing_draft" = "false" ]; then
+            echo "Release $tag already exists. Optimized artifacts for this commit remain available in this workflow run."
             exit 0
           fi
-          curl -fsS -X POST "$COOLIFY_WEBHOOK" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN"
-      - name: Remove signing keychain
-        if: always()
-        run: security delete-keychain "$KEYCHAIN_PATH" || true
+          cd dist
+          sha256sum --check ./*.sha256
+          cd ..
+          if [ "$existing_draft" = "true" ]; then
+            gh release upload "$tag" dist/*.exe dist/*.zip dist/*.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" dist/*.exe dist/*.zip dist/*.sha256 \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Cadence $VERSION for Windows" --generate-notes --draft
+          fi
+          # The updater sees only complete releases, after all assets upload.
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest

@@ -1,0 +1,3 @@
+// GPUI already embeds its DPI-aware, SegmentHeap application manifest.
+// Only add Cadence's icon here so the manifest resource is not duplicated.
+1 ICON "AppIcon.ico"

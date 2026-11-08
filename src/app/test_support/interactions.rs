@@ -225,6 +225,42 @@ impl Fixture {
         });
     }
 
+    fn right_click_track(&mut self, index: usize) {
+        self.right_click_track_at(index, 150.);
+    }
+
+    fn right_click_track_at(&mut self, index: usize, offset: f32) {
+        let position = self.update(|window, _| {
+            let bounds = window.find(("spotify-track", index)).bounds();
+            point(bounds.origin.x + px(offset), bounds.center().y)
+        });
+        self.update(|window, cx| {
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Right,
+                    position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        self.update(|window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Right,
+                    position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
     fn mouse_move_to(&mut self, position: Point<gpui_kit::Pixels>) {
         self.update(|window, cx| {
             window.dispatch_event(
@@ -271,7 +307,16 @@ impl Fixture {
 fn search_shortcut_focuses_input_and_enter_submits_text_without_toggling_playback() {
     let mut fixture = Fixture::new(false);
     fixture.no_commands();
-    fixture.update(|window, cx| window.press("cmd-k", cx));
+    fixture.update(|window, cx| {
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-k"
+            } else {
+                "ctrl-k"
+            },
+            cx,
+        )
+    });
     fixture.update(|window, cx| {
         assert_eq!(window.find("search-input").focused(), Some(true));
         window.input("Blue", cx);
@@ -315,7 +360,14 @@ fn client_id_validation_keeps_focus_and_only_submits_valid_input() {
     fixture.no_commands();
     fixture.update(|window, cx| {
         window.click("client-id-input", cx);
-        window.press("cmd-a", cx);
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+            cx,
+        );
         window.input("0123456789abcdef0123456789abcdef", cx);
     });
     fixture.update(|window, cx| {
@@ -485,8 +537,8 @@ fn queue_keyboard_activation_preserves_playback_and_reports_expansion() {
 #[test]
 fn duplicate_track_actions_preserve_row_index_and_favorite_does_not_start_playback() {
     let mut fixture = Fixture::new(false);
-    fixture.update(|window, cx| window.hover(("spotify-track", 2usize), cx));
-    fixture.update(|window, cx| window.click(("track-actions", 2usize), cx));
+    fixture.right_click_track(2);
+    fixture.no_commands();
     fixture.update(|window, cx| {
         assert!(window.try_find(("track-menu-play", 1usize)).is_none());
         window.click(("track-menu-play", 2usize), cx);
@@ -544,6 +596,27 @@ fn duplicate_track_actions_preserve_row_index_and_favorite_does_not_start_playba
     fixture.no_commands();
 }
 
+#[test]
+fn liked_songs_use_right_click_without_a_trailing_button_or_starting_playback() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        window.hover(("spotify-track", 1usize), cx);
+        assert!(window.try_find(("track-actions", 1usize)).is_none());
+    });
+    fixture.right_click_track(1);
+    fixture.no_commands();
+    fixture.update(|window, _| assert!(window.try_find(("track-menu-play", 1usize)).is_some()));
+    fixture.right_click_track_at(2, 40.);
+    fixture.no_commands();
+    fixture.update(|window, _| {
+        assert!(window.try_find(("track-menu-play", 1usize)).is_none());
+        assert!(window.try_find(("track-menu-play", 2usize)).is_some());
+    });
+    fixture.update(|window, cx| window.click("queue-toggle", cx));
+    fixture.update(|window, _| assert!(window.try_find(("track-menu-play", 2usize)).is_none()));
+    fixture.no_commands();
+}
+
 /// A point on the menu surface just above `item`, in the menu's own padding,
 /// so a press there lands on the menu rather than on any item in it.
 fn menu_padding_above(item: &ElementSnapshot) -> Point<gpui_kit::Pixels> {
@@ -554,8 +627,7 @@ fn menu_padding_above(item: &ElementSnapshot) -> Point<gpui_kit::Pixels> {
 #[test]
 fn pressing_inside_the_track_menu_keeps_it_open_without_playing_the_row_beneath() {
     let mut fixture = Fixture::new(false);
-    fixture.update(|window, cx| window.hover(("spotify-track", 1usize), cx));
-    fixture.update(|window, cx| window.click(("track-actions", 1usize), cx));
+    fixture.right_click_track(1);
     let menu_padding =
         fixture.update(|window, _| menu_padding_above(&window.find(("track-menu-play", 1usize))));
     let row_beneath = fixture.update(|window, _| window.find(("spotify-track", 1usize)).bounds());
@@ -649,7 +721,11 @@ fn player_bar_opens_each_credited_artist_and_the_album_separately() {
 fn player_bar_title_opens_the_album_from_the_keyboard() {
     let mut fixture = Fixture::new(false);
     fixture.play(credited_track());
-    fixture.press("cmd-k");
+    fixture.press(if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    });
     assert_eq!(fixture.route(), Route::Search);
 
     fixture.tab_to("player-title");
@@ -1074,7 +1150,11 @@ fn space_activates_a_focused_transport_control_instead_of_toggling_playback() {
 #[test]
 fn a_pointer_press_leaves_keyboard_focus_with_the_workspace() {
     let mut fixture = Fixture::new(false);
-    fixture.press("cmd-k");
+    fixture.press(if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    });
     assert!(fixture.focused("search-input"));
 
     fixture.update(|window, cx| window.click("nav-favorites", cx));

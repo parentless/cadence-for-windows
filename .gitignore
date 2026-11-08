@@ -11,3 +11,9 @@
 # Local tooling artifacts
 .beads.gate.lock
 .playwright-mcp/
+
+# Local files never belong in the public repository
+.DS_Store
+.env
+.env.*
+!.env.example

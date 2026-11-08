@@ -53,6 +53,25 @@ mod tests {
     }
 
     #[test]
+    fn distributed_debug_builds_embed_their_assets() {
+        // Borrowed data comes from the binary's static embedded bytes; the
+        // debug filesystem loader returns owned data from the source checkout.
+        for icon in CadenceIcon::ALL {
+            let data = CadenceAssets.load(&icon.path()).unwrap().unwrap();
+            assert!(
+                matches!(data, Cow::Borrowed(_)),
+                "{} depends on source files",
+                icon.path()
+            );
+        }
+        let data = CadenceAssets.load("icons/check.svg").unwrap().unwrap();
+        assert!(
+            matches!(data, Cow::Borrowed(_)),
+            "kit assets depend on source files"
+        );
+    }
+
+    #[test]
     fn kit_icons_still_resolve_through_the_fallback() {
         assert!(
             CadenceAssets

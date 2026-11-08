@@ -104,13 +104,17 @@ pub(super) fn open_main_window(cx: &mut App) {
             is_resizable: true,
             titlebar: Some(gpui_kit::TitlebarOptions {
                 title: Some("Cadence".into()),
-                appears_transparent: true,
+                appears_transparent: cfg!(target_os = "macos"),
                 traffic_light_position: Some(traffic_light_position(Theme::global(cx).font_size)),
             }),
             ..Default::default()
         },
         cx,
         |window, cx| {
+            #[cfg(target_os = "windows")]
+            window.on_window_should_close(cx, |_, cx| {
+                services::AppServices::onboarding_window(cx).is_none()
+            });
             let cadence = cx.new(|cx| Workspace::new(window, cx));
             services::AppServices::set_root(cadence.downgrade(), cx);
             cadence
@@ -118,7 +122,13 @@ pub(super) fn open_main_window(cx: &mut App) {
     );
     match opened {
         Ok((handle, _)) => services::AppServices::set_main_window(Some(handle), cx),
-        Err(error) => log::error!("could not open the Cadence window: {error}"),
+        Err(error) => {
+            log::error!("could not open the Cadence window: {error:#}");
+            #[cfg(target_os = "windows")]
+            crate::diagnostics::show_error(&format!(
+                "Could not open the Cadence window:\n{error:#}"
+            ));
+        }
     }
 }
 
@@ -137,17 +147,29 @@ pub(super) fn ensure_onboarding_window(cx: &mut App) {
             is_resizable: false,
             titlebar: Some(gpui_kit::TitlebarOptions {
                 title: Some("Cadence".into()),
-                appears_transparent: true,
+                appears_transparent: cfg!(target_os = "macos"),
                 traffic_light_position: Some(traffic_light_position(Theme::global(cx).font_size)),
             }),
             ..Default::default()
         },
         cx,
-        |window, cx| cx.new(|cx| OnboardingWindow::new(window, cx)),
+        |window, cx| {
+            #[cfg(target_os = "windows")]
+            window.on_window_should_close(cx, |_, cx| {
+                services::AppServices::main_window(cx).is_none()
+            });
+            cx.new(|cx| OnboardingWindow::new(window, cx))
+        },
     );
     match opened {
         Ok((handle, _)) => services::AppServices::set_onboarding_window(Some(handle), cx),
-        Err(error) => log::error!("could not open the sign-in window: {error}"),
+        Err(error) => {
+            log::error!("could not open the sign-in window: {error:#}");
+            #[cfg(target_os = "windows")]
+            crate::diagnostics::show_error(&format!(
+                "Could not open the sign-in window:\n{error:#}"
+            ));
+        }
     }
 }
 
@@ -170,7 +192,23 @@ fn close_window(handle: Option<gpui_kit::AnyWindowHandle>, cx: &mut App) {
 
 /// Pins the sign-in window over main as one unit: the pair moves together,
 /// the sign-in window cannot fall behind main, and neither closes separately.
-fn lock_onboarding_over_main(cx: &mut App) {
+fn lock_onboarding_over_main(_cx: &mut App) {
+    #[cfg(target_os = "windows")]
+    if let (Some(parent), Some(child)) = (
+        win_window(services::AppServices::main_window(_cx), _cx),
+        win_window(services::AppServices::onboarding_window(_cx), _cx),
+    ) {
+        // Ownership keeps sign-in above main without making it globally topmost.
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+                child,
+                windows_sys::Win32::UI::WindowsAndMessaging::GWLP_HWNDPARENT,
+                parent as isize,
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    let cx = _cx;
     #[cfg(target_os = "macos")]
     {
         let parent = mac_window(services::AppServices::main_window(cx), cx);
@@ -198,6 +236,23 @@ fn unlock_and_close_onboarding(cx: &mut App) {
         }
     }
     close_window(onboarding, cx);
+}
+
+#[cfg(target_os = "windows")]
+fn win_window(
+    handle: Option<gpui_kit::AnyWindowHandle>,
+    cx: &mut App,
+) -> Option<windows_sys::Win32::Foundation::HWND> {
+    handle?
+        .update(cx, |_, window, _| {
+            let handle = raw_window_handle::HasWindowHandle::window_handle(window).ok()?;
+            match handle.as_raw() {
+                raw_window_handle::RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as _),
+                _ => None,
+            }
+        })
+        .ok()
+        .flatten()
 }
 
 #[cfg(target_os = "macos")]

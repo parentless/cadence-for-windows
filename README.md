@@ -5,16 +5,41 @@
 <h1 align="center">Cadence</h1>
 
 <p align="center">
-  A minimal Spotify player for macOS.<br>
-  Native, responsive, and typically uses around 120 MB of RAM.
+  A minimal Spotify player for macOS and Windows.<br>
+  Rust, GPUI rendering, and native audio playback.
 </p>
 
 <p align="center">
-  <a href="https://github.com/infomiho/cadence/actions/workflows/ci.yml"><img src="https://github.com/infomiho/cadence/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black.svg" alt="MIT license"></a>
 </p>
 
 ![Cadence showing the Liked Songs library](assets/cadence.webp)
+
+This is an open-source Windows-focused fork of
+[infomiho/cadence](https://github.com/infomiho/cadence). The original MIT license
+and author attribution are preserved. macOS source support remains available.
+
+## Windows downloads and updates
+
+Open the [Releases](https://github.com/parentless/cadence-for-windows/releases/latest) page for the optimized Windows x86-64 EXE
+or portable ZIP. These are release builds with thin LTO, an embedded C runtime,
+assets and precompiled GPUI shaders. The target computer needs no Rust toolchain
+or Spotify desktop app. Spotify Premium and your own Spotify developer Client
+ID are required; the app guides you through setup.
+
+Windows release builds check this repository's public GitHub releases in the
+background after launch and once daily. **Settings → Updates → Install update**
+downloads and verifies the new executable, then restarts Cadence to replace it.
+Automatic checks can be disabled. Keep Cadence in a writable directory such as
+`%LOCALAPPDATA%\Programs\Cadence`. Debug builds do not self-update.
+
+Every push to `main` builds an optimized EXE/ZIP in Actions. Bumping `version`
+in `Cargo.toml` and its `Cargo.lock` package entry publishes a new stable
+`vMAJOR.MINOR.PATCH` release automatically after Windows checks pass. Re-pushing
+the same version keeps its published release immutable and leaves fresh build
+artifacts in the workflow run. Tag pushes and manual runs are supported too.
+No Apple signing secrets, private access tokens, or separate update server are
+needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 
 ## Features
 
@@ -23,6 +48,7 @@
 - Browse native artist and album pages
 - Pin playlists to the sidebar
 - Now Playing and media key controls
+- Optional Discord Rich Presence with current track, artist, artwork, and progress
 - Light, dark, and system appearances
 - Optional pixel-art player mascot
 - Persistent playback and library state
@@ -36,6 +62,12 @@ through CPAL, rspotify connects to the Spotify Web API, and SQLite keeps local s
 
 ## Install
 
+For Windows, see [Windows build and installation instructions](docs/WINDOWS.md).
+The **Windows** Actions workflow produces a portable `.exe` and release zip;
+this fork preserves the Rust, GPUI, librespot, and CPAL architecture.
+
+### macOS
+
 1. Download the latest DMG from [Releases](https://github.com/infomiho/cadence/releases/latest).
 2. Open the DMG and drag Cadence into Applications.
 3. Launch Cadence from Applications and follow the Spotify setup below.
@@ -44,7 +76,7 @@ Release downloads are signed with Developer ID and notarized by Apple.
 
 ## Set Up Spotify
 
-Cadence requires macOS and Spotify Premium. On first launch, Cadence guides you
+Cadence requires Spotify Premium. On first launch, Cadence guides you
 through creating a Spotify developer app and entering its Client ID. Client IDs
 are public; Cadence never needs your client secret.
 
@@ -53,11 +85,12 @@ are public; Cadence never needs your client secret.
 3. Copy the Client ID from **Basic Information** and enter it in Cadence.
 
 Cadence stores the Client ID in app preferences and keeps login and playback
-tokens in macOS Keychain.
+tokens in macOS Keychain or Windows Credential Manager.
 
 ## Run From Source
 
-Building Cadence requires Rust and Apple's Metal Toolchain. Developers can skip
+On Windows, follow the [MSVC and Windows SDK build instructions](docs/WINDOWS.md).
+On macOS, building Cadence requires Rust and Apple's Metal Toolchain. Developers can skip
 the setup screen by setting `SPOTIFY_CLIENT_ID` at launch:
 
 ```sh
@@ -72,13 +105,14 @@ SPOTIFY_CLIENT_ID="your-client-id" ./scripts/run-signed.sh
 
 ## Releases
 
-Version tags publish a signed and notarized DMG with a SHA-256 checksum on the
-[releases page](https://github.com/infomiho/cadence/releases). Maintainers set
-up the signing secrets once with `scripts/setup-release-signing.sh`.
+Windows releases are built and published by this fork's Actions workflow.
+See [releasing](docs/RELEASING.md) for the complete versioning and update flow.
+The macOS signing scripts remain in source for maintainers who configure their
+own Apple signing and Sparkle feed; this fork's publisher produces Windows assets.
 
 Release builds do not include a shared Spotify Client ID. Each person configures
-their own Spotify developer app on first launch. The logo attribution is in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+their own Spotify developer app on first launch. Logo and bundled backend
+attributions are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 

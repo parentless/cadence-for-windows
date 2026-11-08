@@ -219,7 +219,7 @@ impl Onboarding {
                         .mt_3()
                         .text_size(tokens::CAPTION_TEXT)
                         .text_color(rgb(palette.text_muted))
-                        .child("No client secret needed. Tokens stay in Keychain."),
+                        .child(if cfg!(target_os = "windows") { "No client secret needed. Tokens stay in Windows Credential Manager." } else { "No client secret needed. Tokens stay in Keychain." }),
                 )
             })
             .child(div().flex_1())

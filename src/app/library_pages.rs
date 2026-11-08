@@ -99,7 +99,10 @@ impl EventEmitter<PageEvent> for LibraryTracksPage {}
 
 impl LibraryTracksPage {
     pub(super) fn new(section: LibrarySection, cx: &mut Context<Self>) -> Self {
-        let tracks = cx.new(|cx| track_list::TrackList::new(cx));
+        let tracks = cx.new(|cx| {
+            track_list::TrackList::new(cx)
+                .with_context_menu_only(matches!(section, LibrarySection::LikedSongs))
+        });
         Self {
             section,
             library: services::AppServices::library(cx),

@@ -115,6 +115,16 @@ impl Workspace {
                     }
                     cx.notify();
                 }
+                settings::SettingsEvent::SetDiscord(config) => {
+                    if let Err(error) =
+                        services::AppServices::set_discord_config(config.clone(), cx)
+                    {
+                        this.last_error =
+                            Some(format!("Could not save Discord settings: {error}").into());
+                    }
+                    this.settings.update(cx, |_, cx| cx.notify());
+                    cx.notify();
+                }
                 settings::SettingsEvent::SetMascot(mascot) => {
                     let result = services::AppServices::set_mascot(*mascot, cx);
                     let result = services::require_settings_storage(result);
@@ -362,6 +372,8 @@ impl Render for Workspace {
             toolbar.show(route, back_target, error, cx)
         });
 
+        let overlay_toolbar = route == Route::Artist;
+
         div()
             .id("cadence-root")
             .key_context(WORKSPACE_KEY_CONTEXT)
@@ -405,19 +417,30 @@ impl Render for Workspace {
                     .child(self.sidebar.clone())
                     .child(
                         div()
+                            .relative()
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .flex_col()
                             .bg(rgb(palette.surface))
-                            .child(self.toolbar.clone())
+                            .when(!overlay_toolbar, |body| body.child(self.toolbar.clone()))
                             .child(
                                 div()
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_hidden()
                                     .child(self.page()),
-                            ),
+                            )
+                            .when(overlay_toolbar, |body| {
+                                body.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .right_0()
+                                        .child(self.toolbar.clone()),
+                                )
+                            }),
                     )
                     .when(self.player_bar.read(cx).queue_open(), |root| {
                         root.child(self.queue_drawer.clone())

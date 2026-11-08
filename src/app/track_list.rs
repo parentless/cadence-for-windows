@@ -16,6 +16,9 @@ pub(super) struct TrackList {
     /// The row whose action menu is open, keyed by source ID and row index so
     /// the same track appearing twice opens only the row that was clicked.
     menu_open: Option<String>,
+    context_menu_only: bool,
+    palette: Option<CadencePalette>,
+    menu_position: Option<gpui_kit::Point<Pixels>>,
     /// Album already on screen, whose "Go to album" entry would go nowhere.
     current_album_id: Option<String>,
     library: Entity<library::Library>,
@@ -31,11 +34,24 @@ impl TrackList {
             id: None,
             tracks: Arc::default(),
             menu_open: None,
+            context_menu_only: false,
+            palette: None,
+            menu_position: None,
             current_album_id: None,
             library: services::AppServices::library(cx),
             player: services::AppServices::player(cx),
             image_cache: services::AppServices::image_cache(cx),
         }
+    }
+
+    pub(super) fn with_palette(mut self, palette: CadencePalette) -> Self {
+        self.palette = Some(palette);
+        self
+    }
+
+    pub(super) fn with_context_menu_only(mut self, enabled: bool) -> Self {
+        self.context_menu_only = enabled;
+        self
     }
 
     /// Shows `tracks` under `id`, which pages vary per playlist or album so
@@ -82,7 +98,9 @@ impl TrackList {
         let Some(track) = self.tracks.get(index).cloned() else {
             return div().into_any_element();
         };
-        let palette = appearance::Appearance::palette(cx);
+        let palette = self
+            .palette
+            .unwrap_or_else(|| appearance::Appearance::palette(cx));
         let is_current_track = self.player.read(cx).is_current_track(&track);
         let favorite = self.library.read(cx).is_favorite(&track);
         let menu_key = format!("{}:{index}", track.source_id);
@@ -102,10 +120,24 @@ impl TrackList {
                     library.set_favorite(favorite_track.clone(), !favorite, cx)
                 });
             }))
-            .on_toggle_menu(cx.listener(move |this, _, _, cx| {
-                this.menu_open = (!menu_open).then(|| menu_key.clone());
-                cx.notify();
-            }))
+            .when(self.context_menu_only, |row| {
+                let menu_key = menu_key.clone();
+                row.context_menu(
+                    self.menu_position,
+                    cx.listener(move |this, event: &gpui_kit::MouseDownEvent, _, cx| {
+                        this.menu_open = Some(menu_key.clone());
+                        this.menu_position = Some(event.position);
+                        cx.notify();
+                    }),
+                )
+            })
+            .when(!self.context_menu_only, |row| {
+                row.on_toggle_menu(cx.listener(move |this, _, _, cx| {
+                    this.menu_open = (!menu_open).then(|| menu_key.clone());
+                    this.menu_position = None;
+                    cx.notify();
+                }))
+            })
             .into_any_element()
     }
 
@@ -123,7 +155,9 @@ impl TrackList {
         is_current_track: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        let palette = appearance::Appearance::palette(cx);
+        let palette = self
+            .palette
+            .unwrap_or_else(|| appearance::Appearance::palette(cx));
         let has_playback_context = self.player.read(cx).now_playing().is_some();
         let next_track = track.clone();
         let queue_track = track.clone();
@@ -268,7 +302,9 @@ impl TrackList {
 
 impl Render for TrackList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = appearance::Appearance::palette(cx);
+        let palette = self
+            .palette
+            .unwrap_or_else(|| appearance::Appearance::palette(cx));
         let compact = is_compact_content_layout(window);
         div()
             .id("track-list")
@@ -276,11 +312,12 @@ impl Render for TrackList {
             .min_h_0()
             .flex()
             .flex_col()
-            .rounded(tokens::PANEL_RADIUS)
             .overflow_hidden()
-            .border_1()
-            .border_color(rgb(palette.border))
-            .child(track_row::track_list_header(palette, compact))
+            .child(track_row::track_list_header(
+                palette,
+                compact,
+                !self.context_menu_only,
+            ))
             .child(
                 uniform_list(
                     self.id
@@ -343,10 +380,7 @@ impl Render for PlaylistList {
             .min_h_0()
             .flex()
             .flex_col()
-            .rounded(tokens::PANEL_RADIUS)
             .overflow_hidden()
-            .border_1()
-            .border_color(rgb(palette.border))
             .child(
                 uniform_list(
                     self.id

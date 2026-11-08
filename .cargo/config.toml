@@ -1,2 +1,6 @@
 [env]
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+
+# Ship a standalone Windows executable without a VC++ runtime installer.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

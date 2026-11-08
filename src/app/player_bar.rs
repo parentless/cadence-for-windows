@@ -164,8 +164,6 @@ impl PlayerBar {
                 .size(tokens::PLAYER_ARTWORK.size)
                 .rounded(tokens::PLAYER_ARTWORK.radius)
                 .bg(rgb(palette.surface_raised))
-                .border_1()
-                .border_color(palette.media_border)
                 .into_any_element();
         };
         let artwork = components::artwork(
@@ -666,9 +664,10 @@ impl QueueDrawer {
                 tokens::QUEUE_ROW_HEIGHT
             })
             .flex_none()
-            .mt_2()
             .px_2p5()
-            .rounded_2xl()
+            .rounded_none()
+            .border_b_1()
+            .border_color(rgb(palette.border))
             .bg(if current {
                 rgb(palette.selection)
             } else {

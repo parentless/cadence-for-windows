@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::TestSupportExt as _;
 
 use page::PageEvent;
 use track_list::{PlaylistList, TrackList};
@@ -235,6 +236,15 @@ impl PlaylistPage {
 }
 
 /// One artist, their popular tracks and their discography.
+const ARTIST_BACKGROUND: u32 = 0x242426;
+const ARTIST_PALETTE: CadencePalette = CadencePalette {
+    canvas: ARTIST_BACKGROUND,
+    surface: ARTIST_BACKGROUND,
+    surface_raised: 0x303033,
+    surface_hover: 0x2D2D30,
+    ..CadencePalette::DARK
+};
+
 pub(super) struct ArtistPage {
     backend: BackendHandle,
     reference: Option<model::ArtistRef>,
@@ -255,7 +265,7 @@ impl EventEmitter<PageEvent> for ArtistPage {}
 
 impl ArtistPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
-        let track_list = cx.new(|cx| TrackList::new(cx));
+        let track_list = cx.new(|cx| TrackList::new(cx).with_palette(ARTIST_PALETTE));
         Self {
             backend,
             reference: None,
@@ -392,7 +402,7 @@ impl ArtistPage {
     }
 
     fn album_card(&self, album: &model::Album, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let palette = appearance::Appearance::palette(cx);
+        let palette = ARTIST_PALETTE;
         let year = album
             .release_date
             .as_deref()
@@ -769,7 +779,7 @@ impl Render for PlaylistPage {
 
 impl Render for ArtistPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = appearance::Appearance::palette(cx);
+        let palette = ARTIST_PALETTE;
         let name = self
             .artist
             .as_ref()
@@ -811,31 +821,83 @@ impl Render for ArtistPage {
             self.discography(albums, window, cx).into_any_element()
         };
 
-        components::page("artist-page")
-            .pt_2()
+        let overlay_inset = tokens::TOOLBAR_HEIGHT.to_pixels(window.rem_size());
+
+        let backdrop = artwork_url.clone().map(|url| {
+            let cache = self.image_cache.clone();
+            img(move |window: &mut Window, cx: &mut App| {
+                cache.update(cx, |cache, cx| cache.artist_backdrop(&url, window, cx))
+            })
+            .absolute()
+            .inset_0()
+            .size_full()
+            .aspect_ratio(1.)
+            .flex_none()
+            .object_fit(gpui_kit::ObjectFit::Cover)
+            .id("artist-backdrop-image")
+            .test_support()
+        });
+        let header = div()
+            .id("artist-header")
+            .test_support()
+            .relative()
+            .w_full()
+            .h(px(264.) + overlay_inset)
+            .flex_none()
+            .overflow_hidden()
+            .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
+            .child(div().absolute().inset_0().bg(gpui_kit::rgba(0x10101455)))
+            .child(div().absolute().inset_0().bg(gpui_kit::linear_gradient(
+                180.,
+                gpui_kit::linear_color_stop(rgb(ARTIST_BACKGROUND).opacity(0.05), 0.),
+                gpui_kit::linear_color_stop(rgb(ARTIST_BACKGROUND), 1.),
+            )))
             .child(
                 page_header()
-                    .child(components::artwork(
-                        palette,
-                        &self.image_cache,
-                        artwork_url.as_deref(),
-                        tokens::ARTIST_ARTWORK,
-                        CadenceIcon::Person,
-                    ))
+                    .relative()
+                    .px_8()
+                    .pt(Rems(2.5).to_pixels(window.rem_size()) + overlay_inset)
+                    .items_end()
                     .child(
                         div()
+                            .id("artist-portrait")
+                            .test_support()
+                            .size(tokens::ARTIST_ARTWORK.size)
+                            .flex_none()
+                            .child(components::artwork(
+                                palette,
+                                &self.image_cache,
+                                artwork_url.as_deref(),
+                                tokens::ARTIST_ARTWORK,
+                                CadenceIcon::Person,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
                             .flex()
                             .flex_col()
                             .gap_2()
                             .child(components::page_title(palette, name))
                             .child(components::page_detail(palette, detail)),
                     ),
-            )
+            );
+        div()
+            .id("artist-page")
+            .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .bg(rgb(ARTIST_BACKGROUND))
+            .text_color(rgb(palette.text))
+            .child(header)
             .child(
                 div()
                     .flex_none()
                     .flex()
                     .gap_2()
+                    .px_8()
                     .mb_4()
                     .child(
                         components::pill(
@@ -860,7 +922,16 @@ impl Render for ArtistPage {
                         })),
                     ),
             )
-            .child(content)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px_8()
+                    .pb_8()
+                    .flex()
+                    .flex_col()
+                    .child(content),
+            )
     }
 }
 

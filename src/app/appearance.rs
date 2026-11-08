@@ -95,7 +95,7 @@ fn apply_palette_to_theme_colors(palette: CadencePalette, colors: &mut ThemeColo
     colors.secondary_foreground = rgb(palette.text_primary).into();
     colors.danger = rgb(palette.destructive).into();
     colors.danger_foreground = rgb(palette.on_destructive).into();
-    colors.popover = rgb(palette.surface_raised).into();
+    colors.popover = rgb(palette.surface_raised).opacity(0.94).into();
     colors.popover_foreground = rgb(palette.text).into();
     colors.accent = rgb(palette.control_hover).into();
     colors.list_hover = rgb(palette.surface_hover).into();

@@ -133,12 +133,12 @@ impl Playback {
                 .context("could not configure librespot authorization")?;
         let saved_refresh_token = if load_saved_token {
             load_playback_refresh_token().await.context(
-                "could not read playback credentials from Keychain; choose Always Allow when macOS asks",
+                if cfg!(target_os = "macos") { "could not read playback credentials from Keychain; choose Always Allow when macOS asks" } else { "could not read playback credentials from the system credential store" },
             )?
         } else {
             None
         };
-        log::info!("playback: credentials read from Keychain");
+        log::info!("playback: credentials read from system credential store");
         let token = match saved_refresh_token {
             Some(refresh_token) => {
                 let refreshed = oauth.refresh_token_async(&refresh_token).await;

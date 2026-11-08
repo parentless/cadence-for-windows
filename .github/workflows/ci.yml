@@ -18,9 +18,9 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: cargo fmt --all --check
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --locked
@@ -33,7 +33,7 @@ jobs:
           uname -m >> target/ui-environment.txt
           system_profiler SPDisplaysDataType >> target/ui-environment.txt
           cargo test --test ui_rendering --locked
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure() && steps.native.outcome == 'failure'
         with:
           name: native-visual-regressions
@@ -49,9 +49,9 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: cargo fmt --manifest-path web/Cargo.toml -- --check
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           workspaces: web
           save-if: ${{ github.ref == 'refs/heads/main' }}
