@@ -553,11 +553,15 @@ pub(super) fn solid_menu_surface(palette: CadencePalette) -> Div {
 
 /// Static placeholders have no shimmer timer and disappear when data arrives.
 pub(super) fn list_skeleton(palette: CadencePalette) -> Div {
+    list_skeleton_rows(palette, 8)
+}
+
+pub(super) fn list_skeleton_rows(palette: CadencePalette, count: usize) -> Div {
     div()
         .flex_1()
         .min_h_0()
         .overflow_hidden()
-        .children((0..8).map(|index| {
+        .children((0..count).map(|index| {
             div()
                 .h_16()
                 .flex_none()

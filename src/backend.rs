@@ -1082,6 +1082,7 @@ struct Worker {
     radio: Radio,
     autoplay: Autoplay,
     playlist_cursor: Option<(Playlist, u32)>,
+    pending_playlist_cursor: Option<Option<(Playlist, u32)>>,
     playlist_prefetch: Option<tokio::task::JoinHandle<Result<crate::model::PlaylistTrackPage>>>,
     session: SessionTasks,
 }
@@ -1109,6 +1110,7 @@ impl Worker {
             radio: Radio::default(),
             autoplay: Autoplay::default(),
             playlist_cursor: startup.playlist_cursor,
+            pending_playlist_cursor: None,
             playlist_prefetch: None,
             session: SessionTasks::default(),
         }
@@ -1258,7 +1260,7 @@ impl Worker {
                 Ok(())
             }
             BackendCommand::PlayContext { tracks, index } => {
-                self.cancel_playlist_continuation();
+                self.prepare_playlist_context(None);
                 self.play_context(tracks, index).await
             }
             BackendCommand::PlayQueueItem { offset } => {
@@ -1275,8 +1277,7 @@ impl Worker {
                 index,
                 next_offset,
             } => {
-                self.cancel_playlist_continuation();
-                self.playlist_cursor = next_offset.map(|offset| (playlist, offset));
+                self.prepare_playlist_context(next_offset.map(|offset| (playlist, offset)));
                 self.play_context(tracks, index).await
             }
             BackendCommand::PlayNext(track) => self.play_next(track).await,
@@ -1514,10 +1515,14 @@ impl Worker {
             .unwrap_or_default();
         match load_context_track(&self.connection.player, &tracks, index, &self.events).await {
             Ok(()) => {
+                if let Some(cursor) = self.pending_playlist_cursor.take() {
+                    self.playlist_cursor = cursor;
+                }
                 self.queue.tracks = tracks;
                 self.commit_loaded_queue(index).await;
             }
             Err(error) => {
+                self.pending_playlist_cursor = None;
                 let _ = self
                     .events
                     .send(BackendEvent::TrackFailed {
@@ -1823,6 +1828,7 @@ impl Worker {
                 self.connection
                     .fail_pending_play(&error, &self.events)
                     .await;
+                self.pending_playlist_cursor = None;
                 let _ = self
                     .events
                     .send(BackendEvent::PlaybackFailed(error.to_string()))
@@ -1832,6 +1838,7 @@ impl Worker {
                 self.connection
                     .fail_pending_play(&error, &self.events)
                     .await;
+                self.pending_playlist_cursor = None;
                 send_error(&self.events, error).await;
             }
             None => {}
@@ -1987,9 +1994,18 @@ impl Worker {
     /// so autoplay can extend the queue before it runs out. The preference
     /// is read inside the task and re-checked when the result lands, so a
     /// toggle takes effect without replumbing.
+    fn prepare_playlist_context(&mut self, cursor: Option<(Playlist, u32)>) {
+        abort_task(&mut self.playlist_prefetch);
+        abort_task(&mut self.autoplay.task);
+        // Commit only after the new track opens. A failed play must leave the
+        // previous playlist's continuation attached to its existing queue.
+        self.pending_playlist_cursor = Some(cursor);
+    }
+
     fn cancel_playlist_continuation(&mut self) {
         abort_task(&mut self.playlist_prefetch);
         self.playlist_cursor = None;
+        self.pending_playlist_cursor = None;
         abort_task(&mut self.autoplay.task);
     }
 
@@ -2055,6 +2071,9 @@ impl Worker {
     }
 
     fn maybe_prefetch_autoplay(&mut self) {
+        if self.pending_playlist_cursor.is_some() {
+            return;
+        }
         if self.playlist_cursor.is_some() {
             if self
                 .queue
@@ -3360,6 +3379,10 @@ mod tests {
         assert_eq!(worker.playlist_cursor, Some((playlist.clone(), 15)));
         assert_eq!(worker.queue.tracks.len(), 15);
         assert!(worker.playlist_prefetch.is_none());
+        worker.prepare_playlist_context(None);
+        worker.play_context(vec![favorite()], 0).await.unwrap(); // no connected player
+        assert_eq!(worker.playlist_cursor, Some((playlist.clone(), 15)));
+        assert!(worker.pending_playlist_cursor.is_none());
         worker
             .finish_playlist_page(Some(Ok(Ok(crate::model::PlaylistTrackPage {
                 tracks: vec![favorite(); 15],

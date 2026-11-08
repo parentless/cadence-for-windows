@@ -1,5 +1,6 @@
 use super::*;
 use gpui_kit::TestSupportExt as _;
+use std::cell::RefCell;
 
 use page::PageEvent;
 
@@ -15,6 +16,8 @@ pub(super) struct TrackList {
     /// Set by `show`, which always runs before the list is first painted.
     id: Option<ElementId>,
     tracks: Arc<[model::Track]>,
+    playlist_tracks: Option<Rc<RefCell<Vec<model::Track>>>>,
+    shown_playlist_len: usize,
     /// The row whose action menu is open, keyed by source ID and row index so
     /// the same track appearing twice opens only the row that was clicked.
     menu_open: Option<String>,
@@ -43,6 +46,8 @@ impl TrackList {
         Self {
             id: None,
             tracks: Arc::default(),
+            playlist_tracks: None,
+            shown_playlist_len: 0,
             menu_open: None,
             inline_rows: false,
             queue_mode: false,
@@ -97,17 +102,65 @@ impl TrackList {
         cx: &mut Context<Self>,
     ) {
         let id = Some(id.into());
-        if self.id == id && Arc::ptr_eq(&self.tracks, &tracks) {
+        if self.playlist_tracks.is_none() && self.id == id && Arc::ptr_eq(&self.tracks, &tracks) {
             return;
         }
         if self.id != id {
             self.scroll = gpui_kit::UniformListScrollHandle::new();
         }
         self.id = id;
+        self.playlist_tracks = None;
         self.tracks = tracks;
         self.load_more_emitted = false;
         self.menu_open = None;
         cx.notify();
+    }
+
+    /// Playlist pagination appends to one UI-thread buffer. The list reads only
+    /// visible rows, avoiding a full metadata copy for each fifteen-entry page.
+    pub(super) fn show_playlist(
+        &mut self,
+        id: impl Into<ElementId>,
+        tracks: Rc<RefCell<Vec<model::Track>>>,
+        cx: &mut Context<Self>,
+    ) {
+        let id = Some(id.into());
+        let len = tracks.borrow().len();
+        if self.id == id
+            && self
+                .playlist_tracks
+                .as_ref()
+                .is_some_and(|old| Rc::ptr_eq(old, &tracks))
+            && self.shown_playlist_len == len
+        {
+            return;
+        }
+        if self.id != id {
+            self.scroll = gpui_kit::UniformListScrollHandle::new();
+        }
+        self.id = id;
+        self.tracks = Arc::default();
+        self.playlist_tracks = Some(tracks);
+        self.shown_playlist_len = len;
+        self.load_more_emitted = false;
+        self.menu_open = None;
+        cx.notify();
+    }
+
+    pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        self.playlist_tracks = None;
+        self.tracks = Arc::default();
+        self.id = None;
+        self.menu_open = None;
+        self.playlist_context = None;
+        self.hover = components::HoverHighlight::default();
+        cx.notify();
+    }
+
+    fn track_count(&self) -> usize {
+        self.playlist_tracks
+            .as_ref()
+            .map_or(self.tracks.len(), |tracks| tracks.borrow().len())
     }
 
     /// Suppresses the "Go to album" entry for the album the page is showing.
@@ -129,7 +182,12 @@ impl TrackList {
     }
 
     fn row(&mut self, index: usize, compact: bool, cx: &mut Context<Self>) -> AnyElement {
-        let Some(track) = self.tracks.get(index).cloned() else {
+        let track = if let Some(tracks) = &self.playlist_tracks {
+            tracks.borrow().get(index).cloned()
+        } else {
+            self.tracks.get(index).cloned()
+        };
+        let Some(track) = track else {
             return div().into_any_element();
         };
         let mut palette = self
@@ -195,7 +253,10 @@ impl TrackList {
                 .update(cx, |player, cx| player.play_queue_item(index, cx));
             return;
         }
-        let tracks = self.tracks.to_vec();
+        let tracks = self
+            .playlist_tracks
+            .as_ref()
+            .map_or_else(|| self.tracks.to_vec(), |tracks| tracks.borrow().clone());
         self.player.update(cx, |player, cx| {
             if let Some((playlist, next)) = self.playlist_context.clone() {
                 player.play_playlist(playlist, tracks, index, next, cx)
@@ -371,7 +432,7 @@ impl Render for TrackList {
             .fill(self.palette.is_some() || palette.canvas == CadencePalette::DARK.canvas);
         let compact = self.queue_mode || is_compact_content_layout(window);
         if self.inline_rows {
-            let rows = (0..self.tracks.len())
+            let rows = (0..self.track_count())
                 .map(|index| self.row(index, compact, cx))
                 .collect::<Vec<_>>();
             return div()
@@ -398,7 +459,7 @@ impl Render for TrackList {
                     self.id
                         .clone()
                         .expect("show sets the id before first paint"),
-                    self.tracks.len()
+                    self.track_count()
                         + usize::from(
                             self.playlist_context
                                 .as_ref()
@@ -407,20 +468,20 @@ impl Render for TrackList {
                     cx.processor(move |this, range: Range<usize>, _, cx| {
                         if this.can_load_more
                             && !this.load_more_emitted
-                            && range.end >= this.tracks.len().saturating_sub(3)
+                            && range.end >= this.track_count().saturating_sub(3)
                         {
                             this.load_more_emitted = true;
                             cx.emit(LoadMoreTracks);
                         }
                         range
                             .map(|index| {
-                                if index < this.tracks.len() {
+                                if index < this.track_count() {
                                     this.row(index, compact, cx)
                                 } else {
                                     div()
                                         .h_16()
                                         .w_full()
-                                        .child(components::list_skeleton(palette))
+                                        .child(components::list_skeleton_rows(palette, 1))
                                         .into_any_element()
                                 }
                             })

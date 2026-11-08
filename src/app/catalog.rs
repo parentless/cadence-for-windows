@@ -1,5 +1,6 @@
 use super::*;
 use gpui_kit::TestSupportExt as _;
+use std::cell::RefCell;
 
 use page::PageEvent;
 use track_list::{PlaylistList, TrackList};
@@ -148,7 +149,7 @@ impl SearchPage {
 pub(super) struct PlaylistPage {
     backend: BackendHandle,
     selected: Option<model::Playlist>,
-    tracks: Arc<[model::Track]>,
+    tracks: Rc<RefCell<Vec<model::Track>>>,
     loaded: bool,
     next_offset: Option<u32>,
     _pagination_subscription: Subscription,
@@ -169,7 +170,7 @@ impl PlaylistPage {
         Self {
             backend,
             selected: None,
-            tracks: Arc::default(),
+            tracks: Rc::default(),
             loaded: false,
             next_offset: None,
             _pagination_subscription: cx.subscribe(
@@ -192,11 +193,11 @@ impl PlaylistPage {
     }
 
     /// Starts the page's contents from the top, if there is anything to play.
-    pub(super) fn play(&mut self, tracks: &Arc<[model::Track]>, cx: &mut Context<Self>) {
-        if tracks.is_empty() {
+    pub(super) fn play(&mut self, tracks: &Rc<RefCell<Vec<model::Track>>>, cx: &mut Context<Self>) {
+        if tracks.borrow().is_empty() {
             return;
         }
-        let tracks = tracks.to_vec();
+        let tracks = tracks.borrow().clone();
         if let Some(playlist) = self.selected.clone() {
             self.player.update(cx, |player, cx| {
                 player.play_playlist(playlist, tracks, 0, self.next_offset, cx)
@@ -206,7 +207,8 @@ impl PlaylistPage {
 
     pub(super) fn open(&mut self, playlist: model::Playlist, cx: &mut Context<Self>) {
         self.selected = Some(playlist.clone());
-        self.tracks = Arc::default();
+        self.tracks = Rc::default();
+        self.track_list.update(cx, |list, cx| list.clear(cx));
         self.loaded = false;
         self.error = None;
         self.request = None;
@@ -249,11 +251,7 @@ impl PlaylistPage {
                         if let Some(playlist) = page.selected.as_mut() {
                             playlist.track_count = result.total;
                         }
-                        let mut tracks =
-                            Vec::with_capacity(page.tracks.len() + result.tracks.len());
-                        tracks.extend(page.tracks.iter().cloned());
-                        tracks.extend(result.tracks);
-                        page.tracks = tracks.into();
+                        page.tracks.borrow_mut().extend(result.tracks);
                         page.error = None;
                         cx.emit(PageEvent::Loaded);
                     }
@@ -262,7 +260,8 @@ impl PlaylistPage {
                         cx.emit(PageEvent::Failed(error));
                     }
                 }
-                if page.tracks.is_empty() && page.error.is_none() && page.next_offset.is_some() {
+                let empty = page.tracks.borrow().is_empty();
+                if empty && page.error.is_none() && page.next_offset.is_some() {
                     page.load_more(cx);
                 }
                 cx.notify();
@@ -274,7 +273,8 @@ impl PlaylistPage {
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.request = None;
         self.selected = None;
-        self.tracks = Arc::default();
+        self.tracks = Rc::default();
+        self.track_list.update(cx, |list, cx| list.clear(cx));
         self.loaded = false;
         self.next_offset = None;
         self.error = None;
@@ -744,6 +744,7 @@ impl Render for PlaylistPage {
         let palette = appearance::Appearance::palette(cx);
         let tracks = self.tracks.clone();
         let loaded = self.loaded;
+        let empty = tracks.borrow().is_empty();
         let pinned = self
             .selected
             .as_ref()
@@ -766,10 +767,10 @@ impl Render for PlaylistPage {
             .selected
             .as_ref()
             .and_then(|playlist| playlist.artwork_url.clone());
-        let list = if let Some(error) = self.error.as_deref().filter(|_| tracks.is_empty()) {
+        let list = if let Some(error) = self.error.as_deref().filter(|_| empty) {
             components::empty_state(palette, format!("Unable to load playlist: {error}"))
                 .into_any_element()
-        } else if let Some(playlist) = self.selected.as_ref().filter(|_| !tracks.is_empty()) {
+        } else if let Some(playlist) = self.selected.as_ref().filter(|_| !empty) {
             let list_id = (
                 ElementId::from("playlist-tracks"),
                 playlist.source_id.clone(),
@@ -780,7 +781,7 @@ impl Render for PlaylistPage {
                     self.next_offset,
                     self.request.is_some() || self.error.is_some(),
                 );
-                list.show(list_id, tracks.clone(), cx);
+                list.show_playlist(list_id, tracks.clone(), cx);
             });
             self.track_list.clone().into_any_element()
         } else if self.selected.is_none() {
@@ -791,7 +792,7 @@ impl Render for PlaylistPage {
             components::list_skeleton(palette).into_any_element()
         };
         let list = div().flex_1().min_h_0().flex().flex_col().child(list).when(
-            self.error.is_some() && !tracks.is_empty(),
+            self.error.is_some() && !empty,
             |container| {
                 container.child(
                     components::button(palette, "playlist-retry-page")
