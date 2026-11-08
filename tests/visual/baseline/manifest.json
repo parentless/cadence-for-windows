@@ -1,15 +1,15 @@
 {
   "source": {
-    "cadence": "0.7.2",
+    "cadence": "0.8.0",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "a3e39818cddada4671e742be56af33db40f7afcf",
-    "lockfile_sha256": "a97e77d4d0f0968151e2743cb33d69433000c1223fd48a1cc0eece8a56501efa"
+    "revision": "8cf680395fa6813f309a0fa16c36b6bddda431d9",
+    "lockfile_sha256": "69794167b4dc89d39bb3cbeba0714ef682df7940d2b5255700b846f28bc1843d"
   },
   "platform": {
     "os": "macOS",
-    "version": "15.7.9",
-    "build": "24G830",
+    "version": "15.8.2",
+    "build": "24H232",
     "architecture": "arm64",
     "renderer": "Metal"
   },
@@ -38,8 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/infomiho/cadence/actions/runs/36423348275",
-  "matching_run": "https://github.com/infomiho/cadence/actions/runs/36422087268",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42451929341",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -52,19 +51,25 @@
     ],
     "platform": {
       "os": "macOS",
-      "version": "27.0",
-      "build": "26A5425a",
-      "architecture": "aarch64",
-      "renderer": "Metal",
-      "gpu": "Apple M2 Pro"
+      "version": "15.8.2",
+      "build": "24H232",
+      "architecture": "arm64",
+      "renderer": "Metal"
     },
     "source": {
-      "base_revision": "778765608c220e2e752c03539a221358fcfd478e",
-      "files_sha256": {
-        "src/app/player_bar.rs": "b1713e45706b2418ef6f910b5d72143b27fa66520be03b3dff1d17abecbe04d5",
-        "src/app/bootstrap.rs": "276438ed5842ca4d20239cd384f426bd7b5b5139357ab58dee4c27d37385e25c",
-        "src/app/test_support/rendering.rs": "e5022988291f8e34e43fc8218486a5c1f4476d8d17a3f0b5a0891645f69576e7"
-      }
-    }
-  }
+      "cadence": "0.8.0",
+      "gpui-kit": "0.7.0",
+      "gpui-pre": "0.3.7",
+      "revision": "8cf680395fa6813f309a0fa16c36b6bddda431d9",
+      "lockfile_sha256": "69794167b4dc89d39bb3cbeba0714ef682df7940d2b5255700b846f28bc1843d"
+    },
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42451929341"
+  },
+  "reviewed_changes": [
+    "Glass search field and translucent menus",
+    "Bottom-only track and queue separators",
+    "Artwork outlines removed and aspect ratios constrained",
+    "Liked songs trailing action buttons removed; right-click remains available"
+  ],
+  "matching_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42451934275"
 }
