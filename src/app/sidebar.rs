@@ -653,22 +653,25 @@ impl Sidebar {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .px_3()
-                                    .pb_1()
-                                    .child(components::section_label(palette, "Library"))
-                                    .with_animation(
-                                        ("sidebar-library-label", animation_id),
-                                        row_animation.clone(),
-                                        move |label, delta| {
-                                            label.opacity(
-                                                start_progress
-                                                    + (target_progress - start_progress) * delta,
-                                            )
-                                        },
-                                    ),
-                            )
+                            .when(!collapsed, |nav| {
+                                nav.child(
+                                    div()
+                                        .px_3()
+                                        .pb_1()
+                                        .child(components::section_label(palette, "Library"))
+                                        .with_animation(
+                                            ("sidebar-library-label", animation_id),
+                                            row_animation.clone(),
+                                            move |label, delta| {
+                                                label.opacity(
+                                                    start_progress
+                                                        + (target_progress - start_progress)
+                                                            * delta,
+                                                )
+                                            },
+                                        ),
+                                )
+                            })
                             .children(nav_rows),
                     )
                     .when(show_pinned, |sidebar| {

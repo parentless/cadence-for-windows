@@ -1654,6 +1654,10 @@ fn collapsed_sidebar_keeps_playlist_buttons_inside_rail_and_promotes_opened_play
             Some(true)
         );
         assert_eq!(window.find("nav-playlist").selected(), Some(false));
+        assert!(
+            window.find("nav-library").bounds().top()
+                <= window.find("sidebar-toggle").bounds().bottom() + px(20.)
+        );
         let rail_right = COLLAPSED_SIDEBAR_WIDTH.to_pixels(window.rem_size());
         for id in ["nav-library", "nav-favorites", "nav-playlist", "nav-recent"] {
             assert!(window.find(id).bounds().right() <= rail_right);
