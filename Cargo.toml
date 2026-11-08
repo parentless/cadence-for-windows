@@ -26,7 +26,7 @@ open = "5.3"
 rspotify = { version = "0.16.0", default-features = false, features = ["client-reqwest", "reqwest-native-tls"] }
 # gpui-kit's HTTP client is built on this reqwest fork; sharing it keeps one build.
 reqwest = { package = "gpui-pre-reqwest", version = "0.12.15", default-features = false, features = ["rustls-tls", "stream"] }
-ringbuf = "0.5"
+ringbuf = "0.6"
 rubato = "5"
 rust-embed = { version = "8", features = ["debug-embed"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
