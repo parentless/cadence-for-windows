@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.5",
+    "cadence": "0.8.6",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "c159747c46b08b2fa1570580e8db83cda0bc816c",
-    "lockfile_sha256": "7c5327b41c8ee9696c12adfa8f0b12f458068fddebc2c13473337431c58e39f4"
+    "revision": "cad506cf104239f30cf4a3a3e23c443a854eb5ec",
+    "lockfile_sha256": "85fe5b280c1c253074d0b77d83364571ad41d70bd4e07302a34702d3e3e5d89d"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42532353370",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42535615988",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,19 +57,19 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.5",
+      "cadence": "0.8.6",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "c159747c46b08b2fa1570580e8db83cda0bc816c",
-      "lockfile_sha256": "7c5327b41c8ee9696c12adfa8f0b12f458068fddebc2c13473337431c58e39f4"
+      "revision": "cad506cf104239f30cf4a3a3e23c443a854eb5ec",
+      "lockfile_sha256": "85fe5b280c1c253074d0b77d83364571ad41d70bd4e07302a34702d3e3e5d89d"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42532353370"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42535615988"
   },
   "reviewed_changes": [
-    "Playlist table headers use a lighter surface rather than the dark page canvas",
-    "Playlist header and first-track separators are omitted; later tracks retain their bottom dividers",
-    "Fullscreen volume input uses the live viewport size; all player controls keep their previous layout",
-    "All 100 captures repeat exactly; 76 existing references remain pixel-identical",
-    "The only pixel changes are in playlist headers/first rows and the Settings version label; artist, queue, account menu and other screens are unchanged"
+    "Add the shuffle glyph while preserving the positions of existing transport controls at both widths and zoom levels",
+    "Artist-first search, enabled shuffle, and instant collapsed-sidebar playlist tooltips add twelve full-window references",
+    "Account button hover opacity and the Settings version label are the only changes above the player in existing references",
+    "All 112 captures repeat exactly; sixteen existing setup and keyboard-focus references remain pixel-identical",
+    "Recent album/playlist restoration and metadata eviction are covered by state and lifetime tests without changing page layout"
   ]
 }
