@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
+          # Reuse the native CI job's dependencies instead of rebuilding GPUI.
+          shared-key: check
           save-if: false
       - name: Record repeatable screenshots
         run: cargo test --test ui_rendering --locked -- --record

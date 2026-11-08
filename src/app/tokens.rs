@@ -42,8 +42,11 @@ pub(super) const SETTINGS_FIELD_WIDTH: Rems = Rems(13.75);
 
 pub(super) const NAV_ROW_HEIGHT: Rems = Rems(2.625);
 pub(super) const BRAND_LABEL_GAP: Rems = Rems(1.03125);
-/// Clears the traffic lights above the sidebar's first row.
-pub(super) const SIDEBAR_TOP_INSET: Rems = Rems(3.25);
+/// Keep room for macOS traffic lights; Windows already has a native title bar.
+#[cfg(target_os = "macos")]
+pub(super) const SIDEBAR_TOP_INSET: Rems = Rems(2.5);
+#[cfg(not(target_os = "macos"))]
+pub(super) const SIDEBAR_TOP_INSET: Rems = Rems(1.);
 
 pub(super) const PLAYLIST_ROW_HEIGHT: Rems = Rems(4.75);
 pub(super) const ALBUM_CARD_HEIGHT: Rems = Rems(15.25);

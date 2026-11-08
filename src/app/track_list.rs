@@ -17,6 +17,7 @@ pub(super) struct TrackList {
     /// the same track appearing twice opens only the row that was clicked.
     menu_open: Option<String>,
     context_menu_only: bool,
+    inline_rows: bool,
     palette: Option<CadencePalette>,
     menu_position: Option<gpui_kit::Point<Pixels>>,
     /// Album already on screen, whose "Go to album" entry would go nowhere.
@@ -35,6 +36,7 @@ impl TrackList {
             tracks: Arc::default(),
             menu_open: None,
             context_menu_only: false,
+            inline_rows: false,
             palette: None,
             menu_position: None,
             current_album_id: None,
@@ -46,6 +48,13 @@ impl TrackList {
 
     pub(super) fn with_palette(mut self, palette: CadencePalette) -> Self {
         self.palette = Some(palette);
+        self
+    }
+
+    /// Artist top tracks are a bounded section inside the page's outer list.
+    /// Avoid a nested scroll area so wheel input continues into Discography.
+    pub(super) fn with_inline_rows(mut self) -> Self {
+        self.inline_rows = true;
         self
     }
 
@@ -306,6 +315,18 @@ impl Render for TrackList {
             .palette
             .unwrap_or_else(|| appearance::Appearance::palette(cx));
         let compact = is_compact_content_layout(window);
+        if self.inline_rows {
+            let rows = (0..self.tracks.len())
+                .map(|index| self.row(index, compact, cx))
+                .collect::<Vec<_>>();
+            return div()
+                .id("track-list")
+                .w_full()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .children(rows);
+        }
         div()
             .id("track-list")
             .flex_1()

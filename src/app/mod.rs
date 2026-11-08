@@ -301,12 +301,6 @@ enum SearchKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ArtistSection {
-    Popular,
-    Discography,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConnectionState {
     Starting,
     Failed,

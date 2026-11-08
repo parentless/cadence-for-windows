@@ -1217,3 +1217,64 @@ fn escape_cancels_the_sign_in_app_change_wherever_keyboard_focus_is() {
         fixture.no_commands();
     }
 }
+
+#[test]
+fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.open_artist(artist_ref("Artist", "artist-flow"), Route::LikedSongs, cx);
+        });
+    });
+    let BackendCommand::LoadArtist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected artist request");
+    };
+    respond
+        .send(Ok((
+            model::Artist {
+                provider: model::Provider::Spotify,
+                source_id: "artist-flow".into(),
+                spotify_uri: None,
+                name: "Artist".into(),
+                artwork_url: None,
+            },
+            vec![track(0), track(1), track(2)],
+            (0..400)
+                .map(|index| model::Album {
+                    provider: model::Provider::Spotify,
+                    source_id: format!("album-{index}"),
+                    spotify_uri: None,
+                    name: format!("Album {index}").into(),
+                    artists: Vec::new(),
+                    release_date: None,
+                    artwork_url: None,
+                    track_count: Some(10),
+                })
+                .collect(),
+        )))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| {
+        let last_track = window.find(("spotify-track", 2usize)).bounds();
+        assert!(window.find("artist-discography-heading").bounds().origin.y >= last_track.bottom());
+        assert!(
+            window.try_find(("artist-album", 399usize)).is_none(),
+            "offscreen albums stay virtualized"
+        );
+        let position = window.find(("spotify-track", 0usize)).bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-700.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    fixture.update(|window, cx| window.click(("artist-album", 4usize), cx));
+    assert_eq!(fixture.requested_album(), "album-4");
+    assert_eq!(fixture.route(), Route::Album);
+}

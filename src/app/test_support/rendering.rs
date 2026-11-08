@@ -28,6 +28,7 @@ enum Scene {
 
 fn scenes() -> Vec<(&'static str, Scene)> {
     vec![
+        ("artist", Scene::Artist),
         ("settings", Scene::Settings),
         ("settings-autoplay-off", Scene::SettingsAutoplayOff),
         ("settings-mascot-open", Scene::SettingsMenu),
@@ -176,7 +177,18 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                                         artwork_url: Some(url.into()),
                                     },
                                     vec![track(0), track(1), track(2)],
-                                    Vec::new(),
+                                    (0..20)
+                                        .map(|index| model::Album {
+                                            provider: model::Provider::Spotify,
+                                            source_id: format!("fixture-album-{index}"),
+                                            spotify_uri: None,
+                                            name: format!("Release {}", index + 1).into(),
+                                            artists: Vec::new(),
+                                            release_date: Some("2026-06-01".into()),
+                                            artwork_url: Some(url.into()),
+                                            track_count: Some(10),
+                                        })
+                                        .collect(),
                                 )))
                                 .expect("artist fixture reply");
                         }
@@ -356,6 +368,12 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             let bounds = window.find("artist-portrait").bounds();
             assert_eq!(bounds.size.width, px(160.));
             assert_eq!(bounds.size.height, px(160.));
+            let popular = window.find("artist-popular-heading").bounds();
+            let discography = window.find("artist-discography-heading").bounds();
+            let last_track = window.find(("spotify-track", 2usize)).bounds();
+            assert!(popular.origin.y < last_track.origin.y);
+            assert!(discography.origin.y >= last_track.bottom());
+            assert!(discography.origin.y - last_track.bottom() <= px(32.));
             let backdrop = window.find("artist-backdrop-image").bounds();
             let header = window.find("artist-header").bounds();
             assert_eq!(

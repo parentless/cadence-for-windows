@@ -251,7 +251,8 @@ pub(super) struct ArtistPage {
     artist: Option<model::Artist>,
     tracks: Arc<[model::Track]>,
     albums: Arc<[model::Album]>,
-    section: ArtistSection,
+    content_state: gpui_kit::ListState,
+    content_layout: Option<(usize, usize, usize)>,
     loaded: bool,
     error: Option<SharedString>,
     loaded_at: Option<SystemTime>,
@@ -265,14 +266,19 @@ impl EventEmitter<PageEvent> for ArtistPage {}
 
 impl ArtistPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
-        let track_list = cx.new(|cx| TrackList::new(cx).with_palette(ARTIST_PALETTE));
+        let track_list = cx.new(|cx| {
+            TrackList::new(cx)
+                .with_palette(ARTIST_PALETTE)
+                .with_inline_rows()
+        });
         Self {
             backend,
             reference: None,
             artist: None,
             tracks: Arc::default(),
             albums: Arc::default(),
-            section: ArtistSection::Popular,
+            content_state: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.)),
+            content_layout: None,
             loaded: false,
             error: None,
             loaded_at: None,
@@ -281,11 +287,6 @@ impl ArtistPage {
             _list_subscription: page::forward(&track_list, cx),
             track_list,
         }
-    }
-
-    pub(super) fn set_section(&mut self, section: ArtistSection, cx: &mut Context<Self>) {
-        self.section = section;
-        cx.notify();
     }
 
     /// Takes down any open row menu, for a route change no click drove.
@@ -315,7 +316,7 @@ impl ArtistPage {
             self.albums = Arc::default();
             self.loaded = false;
             self.loaded_at = None;
-            self.section = ArtistSection::Popular;
+            self.content_layout = None;
         } else if retrying_failure {
             self.loaded = false;
         }
@@ -333,6 +334,7 @@ impl ArtistPage {
                             page.artist = Some(artist);
                             page.tracks = tracks.into();
                             page.albums = albums.into();
+                            page.content_layout = None;
                             page.loaded = true;
                             page.error = None;
                             page.loaded_at = Some(SystemTime::now());
@@ -366,39 +368,63 @@ impl ArtistPage {
         cx.notify();
     }
 
-    /// The release grid, laid out as rows of fixed-width cards so that the
-    /// whole discography can be virtualized like a list.
-    fn discography(
-        &mut self,
-        albums: Arc<[model::Album]>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let compact = is_compact_content_layout(window);
-        let columns = if compact { 3 } else { 4 };
-        let row_count = albums.len().div_ceil(columns);
-        uniform_list(
-            "artist-discography",
-            row_count,
-            cx.processor(move |this, range: Range<usize>, _, cx| {
-                range
-                    .map(|row| {
-                        let start = row * columns;
-                        let end = (start + columns).min(albums.len());
-                        let mut cards = div().h_64().w_full().flex().items_start().gap_3();
-                        for index in start..end {
-                            cards = cards.child(this.album_card(&albums[index], index, cx));
-                        }
-                        for _ in end..start + columns {
-                            cards = cards.child(div().flex_1().min_w_0());
-                        }
-                        cards
-                    })
-                    .collect::<Vec<_>>()
-            }),
-        )
-        .flex_1()
-        .min_h_0()
+    /// Popular tracks form one small, naturally sized block. Release rows are
+    /// virtualized in the same scroll area, so a large discography stays cheap.
+    fn content_item(&mut self, index: usize, columns: usize, cx: &mut Context<Self>) -> AnyElement {
+        let heading = |id, title| {
+            div()
+                .id(id)
+                .test_support()
+                .text_xl()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .text_color(rgb(ARTIST_PALETTE.text_primary))
+                .child(title)
+        };
+        if index == 0 {
+            return div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(heading("artist-popular-heading", "Popular"))
+                .when(self.tracks.is_empty(), |section| {
+                    section.child(components::page_detail(
+                        ARTIST_PALETTE,
+                        "No popular tracks available",
+                    ))
+                })
+                .when(!self.tracks.is_empty(), |section| {
+                    section.child(self.track_list.clone())
+                })
+                .into_any_element();
+        }
+        if index == 1 {
+            return div()
+                .w_full()
+                .pt_6()
+                .pb_3()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(heading("artist-discography-heading", "Discography"))
+                .when(self.albums.is_empty(), |section| {
+                    section.child(components::page_detail(
+                        ARTIST_PALETTE,
+                        "No releases available",
+                    ))
+                })
+                .into_any_element();
+        }
+        let start = (index - 2) * columns;
+        let end = (start + columns).min(self.albums.len());
+        let mut cards = div().h_64().w_full().flex().items_start().gap_3();
+        for album_index in start..end {
+            cards = cards.child(self.album_card(&self.albums[album_index], album_index, cx));
+        }
+        for _ in end..start + columns {
+            cards = cards.child(div().flex_1().min_w_0());
+        }
+        cards.into_any_element()
     }
 
     fn album_card(&self, album: &model::Album, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -411,6 +437,7 @@ impl ArtistPage {
             .to_owned();
 
         components::button(palette, ("artist-album", index))
+            .test_support()
             .flex_1()
             .min_w_0()
             .h(tokens::ALBUM_CARD_HEIGHT)
@@ -800,25 +827,34 @@ impl Render for ArtistPage {
         } else {
             "Spotify artist".to_owned()
         };
-        let section = self.section;
         let tracks = self.tracks.clone();
-        let albums = self.albums.clone();
+        let columns = if is_compact_content_layout(window) {
+            3
+        } else {
+            4
+        };
         let content = if let Some(error) = self.error.as_ref() {
             components::empty_state(palette, format!("Unable to load artist: {error}"))
                 .into_any_element()
         } else if !self.loaded {
             components::empty_state(palette, "Loading artist…").into_any_element()
-        } else if section == ArtistSection::Popular && !tracks.is_empty() {
+        } else {
+            let layout = (tracks.len(), self.albums.len(), columns);
+            if self.content_layout != Some(layout) {
+                self.content_state
+                    .reset(2 + self.albums.len().div_ceil(columns));
+                self.content_layout = Some(layout);
+            }
             let list_id = (ElementId::from("artist-popular"), source_id);
             self.track_list
                 .update(cx, |list, cx| list.show(list_id, tracks, cx));
-            self.track_list.clone().into_any_element()
-        } else if section == ArtistSection::Popular {
-            components::empty_state(palette, "No popular tracks available").into_any_element()
-        } else if albums.is_empty() {
-            components::empty_state(palette, "No releases available").into_any_element()
-        } else {
-            self.discography(albums, window, cx).into_any_element()
+            gpui_kit::list(
+                self.content_state.clone(),
+                cx.processor(move |this, index, _, cx| this.content_item(index, columns, cx)),
+            )
+            .flex_1()
+            .min_h_0()
+            .into_any_element()
         };
 
         let overlay_inset = tokens::TOOLBAR_HEIGHT.to_pixels(window.rem_size());
@@ -842,7 +878,7 @@ impl Render for ArtistPage {
             .test_support()
             .relative()
             .w_full()
-            .h(px(264.) + overlay_inset)
+            .h(px(208.) + overlay_inset)
             .flex_none()
             .overflow_hidden()
             .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
@@ -856,7 +892,7 @@ impl Render for ArtistPage {
                 page_header()
                     .relative()
                     .px_8()
-                    .pt(Rems(2.5).to_pixels(window.rem_size()) + overlay_inset)
+                    .pt(Rems(1.5).to_pixels(window.rem_size()) + overlay_inset)
                     .items_end()
                     .child(
                         div()
@@ -892,36 +928,6 @@ impl Render for ArtistPage {
             .bg(rgb(ARTIST_BACKGROUND))
             .text_color(rgb(palette.text))
             .child(header)
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .gap_2()
-                    .px_8()
-                    .mb_4()
-                    .child(
-                        components::pill(
-                            palette,
-                            "artist-tab-popular",
-                            "Popular",
-                            section == ArtistSection::Popular,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_section(ArtistSection::Popular, cx)
-                        })),
-                    )
-                    .child(
-                        components::pill(
-                            palette,
-                            "artist-tab-discography",
-                            "Discography",
-                            section == ArtistSection::Discography,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_section(ArtistSection::Discography, cx)
-                        })),
-                    ),
-            )
             .child(
                 div()
                     .flex_1()

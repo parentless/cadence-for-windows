@@ -405,7 +405,7 @@ impl Sidebar {
                     .flex_none()
                     .flex()
                     .flex_col()
-                    .gap_7()
+                    .gap_4()
                     .p(SIDEBAR_CONTENT_PAD)
                     .pt(tokens::SIDEBAR_TOP_INSET)
                     .child(brand)
