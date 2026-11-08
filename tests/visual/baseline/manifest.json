@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.2",
+    "cadence": "0.8.3",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "f047b560fa50a6cb5a8fb11666caf9a497ed6d8e",
-    "lockfile_sha256": "66485aa5780fa6eeeac5c474aeb1b3b7abf98cad35a5f0cd53f643188ae2a8af"
+    "revision": "d1a88c9766d8d6bc194cd390a0327732fc064651",
+    "lockfile_sha256": "abcb41f9a21abfc176a07aa8741ef4d0be04f9cf05df851bc536960c09de4068"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42459838252",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42461626399",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,22 +57,21 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.2",
+      "cadence": "0.8.3",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "f047b560fa50a6cb5a8fb11666caf9a497ed6d8e",
-      "lockfile_sha256": "66485aa5780fa6eeeac5c474aeb1b3b7abf98cad35a5f0cd53f643188ae2a8af"
+      "revision": "d1a88c9766d8d6bc194cd390a0327732fc064651",
+      "lockfile_sha256": "abcb41f9a21abfc176a07aa8741ef4d0be04f9cf05df851bc536960c09de4068"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42459838252"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42461626399"
   },
   "reviewed_changes": [
-    "Opaque account menu over the artist backdrop; glass search retained",
-    "Graphite default selection and five persistent selection-color choices",
-    "Shared track rows and right-click actions across library, search, catalog and queue; no three-dot controls",
-    "Liked Songs column headings removed",
-    "Playlist loading skeletons and explicit song scrollbar",
-    "Virtualized sidebar playlists with truncated long names; long page titles clamped to two lines",
-    "Twelve added reference cases cover the account menu, playlist skeletons and a paged playlist with a long sidebar library",
-    "All 72 captures repeat exactly; 68 match the prior reviewed capture, and the four mascot-menu cases now locate their control by ID and assert the menu is open"
+    "Sidebar playlist covers use the shared bounded image cache, with playlist-icon fallbacks and pinned indicators",
+    "Playlist rows use short hover fades while retaining virtualization and name truncation",
+    "The current track index is a play/pause control in every shared track list",
+    "Saved 75%, 90%, 100%, 110% and 125% native layout zoom presets in Settings; theme changes preserve zoom",
+    "Artist header and virtualized content measurements follow the current rem size",
+    "Sixteen added captures cover sidebar hover, playlist zoom extremes and artist zoom at 125% in both appearances and window widths",
+    "All 88 captures repeat exactly; the open mascot selector is still verified by control ID"
   ]
 }
