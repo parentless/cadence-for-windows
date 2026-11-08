@@ -310,41 +310,15 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             }
         }
         Scene::SettingsMenu => {
-            let sidebar_width = if uses_compact_player_layout(px(width), px(16.)) {
-                200.
-            } else {
-                232.
-            };
-            let content_width = (width - sidebar_width).min(760.);
-            let position = point(
-                px((width + sidebar_width + content_width) / 2. - 170.),
-                px(480.),
-            );
             cx.update_window(handle.into(), |_, window, cx| {
-                window.dispatch_event(
-                    MouseDownEvent {
-                        button: MouseButton::Left,
-                        position,
-                        modifiers: Modifiers::default(),
-                        click_count: 1,
-                        first_mouse: false,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-                window.dispatch_event(
-                    MouseUpEvent {
-                        button: MouseButton::Left,
-                        position,
-                        modifiers: Modifiers::default(),
-                        click_count: 1,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
+                window.within("settings-mascot").click("input", cx);
             })
             .expect("open mascot selector");
             settle(&mut cx, handle.into());
+            cx.update_window(handle.into(), |_, window, _| {
+                assert_eq!(window.find("settings-mascot").expanded(), Some(true));
+            })
+            .expect("mascot menu is actually open");
         }
         _ => {}
     }
