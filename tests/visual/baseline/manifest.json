@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.0",
+    "cadence": "0.8.1",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "8cf680395fa6813f309a0fa16c36b6bddda431d9",
-    "lockfile_sha256": "69794167b4dc89d39bb3cbeba0714ef682df7940d2b5255700b846f28bc1843d"
+    "revision": "6cfc34d7a637382d810a9fa91c18853319da7991",
+    "lockfile_sha256": "525d0cd0d421ae5b1a6a9399938ce7f76fea04b7b76a282c74bde5aff3298803"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42451929341",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42456523114",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,19 +57,18 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.0",
+      "cadence": "0.8.1",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "8cf680395fa6813f309a0fa16c36b6bddda431d9",
-      "lockfile_sha256": "69794167b4dc89d39bb3cbeba0714ef682df7940d2b5255700b846f28bc1843d"
+      "revision": "6cfc34d7a637382d810a9fa91c18853319da7991",
+      "lockfile_sha256": "525d0cd0d421ae5b1a6a9399938ce7f76fea04b7b76a282c74bde5aff3298803"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42451929341"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42456523114"
   },
   "reviewed_changes": [
-    "Glass search field and translucent menus",
-    "Bottom-only track and queue separators",
-    "Artwork outlines removed and aspect ratios constrained",
-    "Liked songs trailing action buttons removed; right-click remains available"
-  ],
-  "matching_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42451934275"
+    "Reduced sidebar top padding and brand/navigation gap",
+    "Artist header reduced vertical whitespace",
+    "Plain Popular heading above tracks; Discography follows in the same scroll area",
+    "Four artist page references added; other existing full-window changes are confined to the sidebar"
+  ]
 }
