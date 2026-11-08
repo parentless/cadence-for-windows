@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.3",
+    "cadence": "0.8.4",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "d1a88c9766d8d6bc194cd390a0327732fc064651",
-    "lockfile_sha256": "abcb41f9a21abfc176a07aa8741ef4d0be04f9cf05df851bc536960c09de4068"
+    "revision": "abe902599e032d7f005cf961f29343e07fda72fa",
+    "lockfile_sha256": "7d2564be0e0c314998952054f645ff9dd6eebfb7d8e861856f66a4c9b7aa71f9"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42461626399",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42487580442",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,21 +57,21 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.3",
+      "cadence": "0.8.4",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "d1a88c9766d8d6bc194cd390a0327732fc064651",
-      "lockfile_sha256": "abcb41f9a21abfc176a07aa8741ef4d0be04f9cf05df851bc536960c09de4068"
+      "revision": "abe902599e032d7f005cf961f29343e07fda72fa",
+      "lockfile_sha256": "7d2564be0e0c314998952054f645ff9dd6eebfb7d8e861856f66a4c9b7aa71f9"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42461626399"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42487580442"
   },
   "reviewed_changes": [
-    "Sidebar playlist covers use the shared bounded image cache, with playlist-icon fallbacks and pinned indicators",
-    "Playlist rows use short hover fades while retaining virtualization and name truncation",
-    "The current track index is a play/pause control in every shared track list",
-    "Saved 75%, 90%, 100%, 110% and 125% native layout zoom presets in Settings; theme changes preserve zoom",
-    "Artist header and virtualized content measurements follow the current rem size",
-    "Sixteen added captures cover sidebar hover, playlist zoom extremes and artist zoom at 125% in both appearances and window widths",
-    "All 88 captures repeat exactly; the open mascot selector is still verified by control ID"
+    "Collapsed sidebar keeps playlist artwork and tooltips, restricts hit targets to the rail, and omits hidden wrapping section labels",
+    "Only the active playlist is highlighted, rather than the generic Playlists navigation entry",
+    "Hover fades keep interactive element identity stable and end frame demand after 140 ms",
+    "Cache controls are visible and fit both layouts; cleanup preserves playback and account data",
+    "A static red update badge near the account opens Settings, with a finite arrival animation when motion is enabled",
+    "Twelve new captures cover collapsed playlists, cache controls, and update availability in both themes and widths",
+    "All 100 captures repeat exactly; 72 existing images are pixel-identical and the other existing differences are confined to the sidebar"
   ]
 }
