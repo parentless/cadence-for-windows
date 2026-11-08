@@ -43,7 +43,7 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 
 ## Features
 
-- Search tracks and playlists
+- Search artists, tracks, and playlists in one request, with artists shown above tracks
 - Play music locally with queue, history, favorites, and radio
 - Browse native artist and album pages
 - Browse playlists in an expanded or compact icon sidebar, with tooltips, active-playlist selection, and recently opened playlists moving to the top
@@ -51,6 +51,8 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Clear artwork from Settings; the shared cache automatically removes older images at its memory budget
 - See a brief red update indicator beside your account when a new release is available
 - Open playlists in 15-entry pages; fetch more near the scroll end
+- Restore loaded tracks and scroll position for two recent albums and two recent playlists; each inactive page is limited to 1,024 tracks and an estimated 2 MiB of track metadata
+- Shuffle loaded upcoming tracks without fetching whole playlists; explicitly queued tracks still play next
 - Double-click tracks to play; right-click for the same actions across every track list
 - Choose Graphite, Blue, Green, Purple, or Rose selection fills in Settings
 - Scale the UI from 75% to 125% with saved zoom presets

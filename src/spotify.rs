@@ -371,6 +371,46 @@ impl Spotify {
         Ok(())
     }
 
+    pub async fn search_catalog(&self, query: &str) -> Result<crate::model::CatalogSearchResults> {
+        self.gated(async {
+            let results = self
+                .client
+                .search_multiple(
+                    query,
+                    [SearchType::Artist, SearchType::Track, SearchType::Playlist],
+                    None,
+                    None,
+                    Some(10),
+                    None,
+                )
+                .await?;
+            Ok(crate::model::CatalogSearchResults {
+                artists: results
+                    .artists
+                    .into_iter()
+                    .flat_map(|page| page.items)
+                    .take(3)
+                    .map(convert_artist)
+                    .collect(),
+                tracks: results
+                    .tracks
+                    .into_iter()
+                    .flat_map(|page| page.items)
+                    .filter(|track| !track.is_local && track.id.is_some())
+                    .filter_map(|track| convert_track(track).ok())
+                    .filter(Track::is_displayable)
+                    .collect(),
+                playlists: results
+                    .playlists
+                    .into_iter()
+                    .flat_map(|page| page.items)
+                    .map(convert_playlist)
+                    .collect(),
+            })
+        })
+        .await
+    }
+
     pub async fn search_tracks(&self, query: &str) -> Result<Vec<Track>> {
         if query.trim().is_empty() {
             return Ok(Vec::new());

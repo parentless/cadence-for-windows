@@ -37,13 +37,20 @@ pub(super) fn bare_button(id: impl Into<ElementId>) -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
+        .active(|style| style.opacity(0.82))
 }
 
-pub(super) fn button(palette: CadencePalette, id: impl Into<ElementId>) -> Stateful<Div> {
+pub(super) fn row_button(palette: CadencePalette, id: impl Into<ElementId>) -> Stateful<Div> {
     control(palette, div().id(id))
         .flex()
         .items_center()
         .justify_center()
+        .active(|style| style.opacity(0.82))
+}
+
+/// Static pointer feedback: no timer, animation wrapper, or layout changes.
+pub(super) fn button(palette: CadencePalette, id: impl Into<ElementId>) -> Stateful<Div> {
+    row_button(palette, id)
 }
 
 /// A button whose own fill covers it. The ring sits outside the edge, where it
@@ -258,7 +265,6 @@ pub(super) fn icon_button_sized(
         .rounded_full()
         .text_color(rgb(palette.text_primary))
         .hover(|style| style.bg(rgb(palette.control)))
-        .active(|style| style.bg(rgb(palette.control_hover)))
         .child(icon(glyph, size, palette.text_primary))
 }
 

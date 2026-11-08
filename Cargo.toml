@@ -1,6 +1,6 @@
 [package]
 name = "cadence"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/parentless/cadence-for-windows"
@@ -8,6 +8,7 @@ description = "A native Rust and GPUI Spotify client for Windows and macOS"
 rust-version = "1.97"
 
 [dependencies]
+fastrand = "2"
 anyhow = "1.0"
 async-channel = "2.5"
 base64 = "0.22"

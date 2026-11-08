@@ -277,6 +277,7 @@ impl PlayerBar {
         let now_playing = player.now_playing().cloned();
         let playing = player.playing();
         let loading = player.loading();
+        let shuffle = player.shuffle();
         let position_ms = player.position_ms(cx.background_executor().now());
         let volume = player.volume();
         let volume_thumb_left = (VOLUME_SLIDER_WIDTH - VOLUME_THUMB_SIZE) * volume;
@@ -395,6 +396,23 @@ impl PlayerBar {
                             .items_center()
                             .gap_2()
                             .child(
+                                components::icon_button(palette, "shuffle", CadenceIcon::Shuffle)
+                                    .when(shuffle, |button| button.bg(rgb(palette.selection)))
+                                    .tooltip(move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(if shuffle {
+                                            "Shuffle on"
+                                        } else {
+                                            "Shuffle off"
+                                        })
+                                        .build(window, cx)
+                                    })
+                                    .test_support()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.player
+                                            .update(cx, |player, cx| player.toggle_shuffle(cx));
+                                    })),
+                            )
+                            .child(
                                 components::icon_button(palette, "previous", CadenceIcon::SkipBack)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.player.update(cx, |player, cx| player.previous(cx));
@@ -402,6 +420,7 @@ impl PlayerBar {
                             )
                             .child(
                                 components::filled_button(palette, "play-toggle")
+                                    .hover(|style| style.opacity(0.9))
                                     .size_10()
                                     .rounded_full()
                                     .bg(rgb(palette.text_primary))
@@ -431,7 +450,8 @@ impl PlayerBar {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.player.update(cx, |player, cx| player.next(cx));
                                     })),
-                            ),
+                            )
+                            .child(div().size_10()),
                     )
                     .child(
                         div()

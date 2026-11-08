@@ -141,14 +141,6 @@ fn activity(track: &crate::model::Track, position_ms: u32, now_ms: u64) -> Value
         activity["assets"] =
             json!({"large_image": cover, "large_text": text(&track.album, "Album")});
     }
-    if let Some(id) = track
-        .spotify_uri
-        .as_deref()
-        .and_then(|uri| uri.strip_prefix("spotify:track:"))
-        .filter(|id| id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
-    {
-        activity["buttons"] = json!([{"label": "Open in Spotify", "url": format!("https://open.spotify.com/track/{id}")}]);
-    }
     activity
 }
 
@@ -372,10 +364,7 @@ mod tests {
             activity["assets"]["large_image"],
             "https://i.scdn.co/image/test"
         );
-        assert_eq!(
-            activity["buttons"][0]["url"],
-            "https://open.spotify.com/track/0123456789012345678901"
-        );
+        assert!(activity.get("buttons").is_none());
     }
 
     #[test]

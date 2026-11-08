@@ -167,3 +167,11 @@ pub struct PlaylistTrackPage {
     pub next_offset: Option<u32>,
     pub total: u32,
 }
+
+/// Bounded catalog results from one combined Spotify search request.
+#[derive(Debug, Default)]
+pub struct CatalogSearchResults {
+    pub artists: Vec<Artist>,
+    pub tracks: Vec<Track>,
+    pub playlists: Vec<Playlist>,
+}

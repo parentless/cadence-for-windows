@@ -222,7 +222,7 @@ impl RenderOnce for TrackRow {
         } else {
             palette.surface
         };
-        let row = components::button(palette, ("spotify-track", index))
+        let row = components::row_button(palette, ("spotify-track", index))
             .test_support()
             .w_full()
             .h_16()

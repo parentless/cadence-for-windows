@@ -25,6 +25,9 @@ enum Scene {
     Setup,
     SetupFilled,
     SearchEntered,
+    SearchArtists,
+    ShuffleOn,
+    PlaylistTooltip,
     Queue {
         open: bool,
         hover: bool,
@@ -54,6 +57,9 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("setup", Scene::Setup),
         ("setup-filled", Scene::SetupFilled),
         ("search-entered", Scene::SearchEntered),
+        ("search-artists", Scene::SearchArtists),
+        ("shuffle-on", Scene::ShuffleOn),
+        ("sidebar-tooltip", Scene::PlaylistTooltip),
         (
             "queue-closed",
             Scene::Queue {
@@ -219,7 +225,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     workspace.library.update(cx, |library, cx| library.clear(cx));
                     workspace.navigate(Route::Playlists, cx);
                 }
-                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed => {
+                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed | Scene::PlaylistTooltip => {
                     let artwork_url = "https://fixtures.invalid/sidebar-cover.png";
                     let cover = image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([45 + (x*2) as u8, 50 + (y*2) as u8, 160, 255]));
                     services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(artwork_url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(cover)]))));
@@ -234,7 +240,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     }).collect();
                     let selected = playlists[0].clone();
                     workspace.library.update(cx, |library, cx| { library.handle_backend_event(BackendEvent::LibraryLoaded { generation: 0, liked_tracks: vec![track(0)], playlists }, 0, cx); });
-                    if matches!(scene, Scene::PlaylistCollapsed) { workspace.sidebar.update(cx, |sidebar, cx| sidebar.set_collapsed(true, cx)); }
+                    if matches!(scene, Scene::PlaylistCollapsed | Scene::PlaylistTooltip) { workspace.sidebar.update(cx, |sidebar, cx| sidebar.set_collapsed(true, cx)); }
                     workspace.load_playlist(selected, cx);
                     workspace.navigate(Route::Playlist, cx);
                     match backend.commands.try_recv().expect("playlist request") {
@@ -242,6 +248,20 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                         _ => panic!("expected playlist request"),
                     }
                 }
+                Scene::SearchArtists => {
+                    workspace.search.update(cx, |search, cx| {
+                        search.set_query("glaive".into(), cx);
+                        search.submit(cx);
+                    });
+                    workspace.navigate(Route::Search, cx);
+                    let BackendCommand::SearchCatalog { respond, .. } = backend.commands.try_recv().unwrap() else { panic!("search request") };
+                    respond.send(Ok(model::CatalogSearchResults {
+                        artists: ["glaive", "glaive radio", "glaive ensemble"].into_iter().enumerate().map(|(index, name)| model::Artist {
+                            provider: model::Provider::Spotify, source_id: format!("artist-{index}"), spotify_uri: None, name: name.into(), artwork_url: None,
+                        }).collect(), tracks: (0..10).map(track).collect(), playlists: vec![],
+                    })).unwrap();
+                }
+                Scene::ShuffleOn => { services::AppServices::player(cx).update(cx, |player, cx| player.toggle_shuffle(cx)); }
                 Scene::UpdateAvailable => { workspace.toolbar.update(cx, |toolbar, cx| toolbar.seed_update_available(cx)); }
                 Scene::Settings | Scene::SettingsAutoplayOff | Scene::SettingsMenu | Scene::SettingsCache => {
                     workspace.open_settings(cx);
@@ -280,6 +300,13 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     .to_platform_input(),
                     cx,
                 );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
+        Scene::PlaylistTooltip => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.hover(("sidebar-playlist", 0usize), cx)
             })
             .unwrap();
             settle(&mut cx, handle.into());

@@ -1790,3 +1790,201 @@ fn volume_slider_uses_live_viewport_after_fullscreen_and_resize() {
         fixture.no_commands();
     }
 }
+
+#[test]
+fn shuffle_toggle_is_lightweight_and_preserves_transport_bounds_and_playback() {
+    let mut fixture = Fixture::new(false);
+    let before = fixture.update(|window, cx| {
+        let player = services::AppServices::player(cx);
+        assert!(!player.read(cx).shuffle());
+        (
+            window.find("play-toggle").bounds(),
+            player.read(cx).now_playing().cloned(),
+        )
+    });
+    fixture.update(|window, cx| window.click("shuffle", cx));
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::SetShuffle(true)
+    ));
+    fixture.update(|window, cx| {
+        let player = services::AppServices::player(cx);
+        assert!(player.read(cx).shuffle());
+        assert_eq!(player.read(cx).now_playing(), before.1.as_ref());
+        assert_eq!(window.find("play-toggle").bounds(), before.0);
+        window.click("shuffle", cx);
+    });
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::SetShuffle(false)
+    ));
+    fixture.no_commands();
+}
+
+#[test]
+fn search_places_artists_above_tracks_and_opens_the_selected_artist() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        window.click("search-input", cx);
+        window.input("glaive", cx);
+        window.press("enter", cx);
+    });
+    let BackendCommand::SearchCatalog { respond, .. } =
+        fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("search request")
+    };
+    respond
+        .send(Ok(model::CatalogSearchResults {
+            artists: vec![model::Artist {
+                provider: model::Provider::Spotify,
+                source_id: "glaive-id".into(),
+                spotify_uri: None,
+                name: "glaive".into(),
+                artwork_url: None,
+            }],
+            tracks: vec![track(0)],
+            playlists: vec![],
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| {
+        assert!(
+            window.find(("search-artist", 0usize)).bounds().bottom()
+                <= window.find(("spotify-track", 0usize)).bounds().top()
+        );
+        window.click(("search-artist", 0usize), cx);
+    });
+    assert_eq!(fixture.requested_artist(), "glaive-id");
+    fixture.no_commands();
+}
+
+#[test]
+fn returning_to_a_recent_playlist_restores_loaded_tracks_and_scroll_without_fetching() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    let open = |fixture: &mut Fixture, id: &str| {
+        fixture.update(|_, cx| {
+            workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+                workspace.load_playlist(
+                    model::Playlist {
+                        source_id: id.into(),
+                        ..paged_playlist()
+                    },
+                    cx,
+                );
+                workspace.navigate(Route::Playlist, cx);
+            })
+        });
+    };
+    let answer = |fixture: &mut Fixture| {
+        let BackendCommand::LoadPlaylist {
+            offset, respond, ..
+        } = fixture.backend.commands.try_recv().unwrap()
+        else {
+            panic!("playlist request")
+        };
+        assert_eq!(offset, 0);
+        respond
+            .send(Ok(model::PlaylistTrackPage {
+                tracks: (0..40).map(track).collect(),
+                next_offset: None,
+                total: 40,
+            }))
+            .unwrap();
+        fixture.update(|_, _| {});
+    };
+    open(&mut fixture, "a");
+    answer(&mut fixture);
+    fixture.update(|window, cx| {
+        let position = window.find(("spotify-track", 1usize)).bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-850.))),
+                modifiers: Default::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    let before = fixture.update(|window, _| window.find(("spotify-track", 15usize)).bounds());
+    open(&mut fixture, "b");
+    answer(&mut fixture);
+    open(&mut fixture, "a");
+    fixture.no_commands();
+    fixture
+        .update(|window, _| assert_eq!(window.find(("spotify-track", 15usize)).bounds(), before));
+    open(&mut fixture, "c");
+    answer(&mut fixture);
+    open(&mut fixture, "b");
+    answer(&mut fixture); // oldest inactive page was evicted
+    fixture.no_commands();
+}
+
+#[test]
+fn recent_album_pages_restore_scroll_without_refetching() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    let open = |fixture: &mut Fixture, id: &str| {
+        fixture.update(|_, cx| {
+            workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+                workspace.open_album(
+                    model::AlbumRef {
+                        name: id.to_owned().into(),
+                        source_id: Some(id.into()),
+                        ..Default::default()
+                    },
+                    Route::LikedSongs,
+                    cx,
+                );
+            })
+        });
+    };
+    let answer = |fixture: &mut Fixture, id: &str| {
+        let BackendCommand::LoadAlbum { respond, .. } =
+            fixture.backend.commands.try_recv().unwrap()
+        else {
+            panic!("album request")
+        };
+        respond
+            .send(Ok((
+                model::Album {
+                    provider: model::Provider::Spotify,
+                    source_id: id.into(),
+                    spotify_uri: None,
+                    name: id.to_owned().into(),
+                    artists: vec![],
+                    release_date: None,
+                    artwork_url: None,
+                    track_count: Some(40),
+                },
+                (0..40).map(track).collect(),
+            )))
+            .unwrap();
+        fixture.update(|_, _| {});
+    };
+    open(&mut fixture, "a");
+    answer(&mut fixture, "a");
+    fixture.update(|window, cx| {
+        let position = window.find(("spotify-track", 1usize)).bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-850.))),
+                modifiers: Default::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    let before = fixture.update(|window, _| window.find(("spotify-track", 15usize)).bounds());
+    open(&mut fixture, "b");
+    answer(&mut fixture, "b");
+    open(&mut fixture, "a");
+    fixture.no_commands();
+    fixture
+        .update(|window, _| assert_eq!(window.find(("spotify-track", 15usize)).bounds(), before));
+}

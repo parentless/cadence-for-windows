@@ -324,9 +324,11 @@ impl Sidebar {
                 cx.notify();
             }))
             .when(self.collapsed, |row| {
-                row.tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(item_label(index)).build(window, cx)
-                })
+                row.tooltip_show_delay(Duration::ZERO)
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(item_label(index))
+                            .build(window, cx)
+                    })
             })
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::Navigate(target))))
             .into_any_element()
@@ -433,7 +435,7 @@ impl Sidebar {
                                     let pinned = services::AppServices::library(cx)
                                         .read(cx)
                                         .is_playlist_pinned(&playlist);
-                                    let row = components::button(
+                                    let row = components::row_button(
                                         palette,
                                         (
                                             if pinned {
@@ -482,12 +484,14 @@ impl Sidebar {
                                         )
                                     })
                                     .when(collapsed, |row| {
-                                        row.tooltip(move |window, cx| {
-                                            gpui_kit::component::tooltip::Tooltip::new(
-                                                label.clone(),
-                                            )
-                                            .build(window, cx)
-                                        })
+                                        row.tooltip_show_delay(Duration::ZERO).tooltip(
+                                            move |window, cx| {
+                                                gpui_kit::component::tooltip::Tooltip::new(
+                                                    label.clone(),
+                                                )
+                                                .build(window, cx)
+                                            },
+                                        )
                                     })
                                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                         this.playlist_hover.set(
@@ -616,6 +620,7 @@ impl Sidebar {
             .text_color(rgb(palette.text_primary))
             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
             .child(brand_fill)
+            .tooltip_show_delay(Duration::ZERO)
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(if collapsed {
                     "Expand sidebar"

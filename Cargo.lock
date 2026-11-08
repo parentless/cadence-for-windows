@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "cadence"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -953,6 +953,7 @@ dependencies = [
  "directories",
  "embed-resource",
  "env_logger",
+ "fastrand",
  "futures",
  "gpui-kit",
  "gpui-pre-reqwest",

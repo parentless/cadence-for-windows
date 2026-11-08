@@ -24,6 +24,7 @@ pub(super) enum CadenceIcon {
     Pause,
     Play,
     SkipForward,
+    Shuffle,
     Key,
     Settings,
     SignOut,
@@ -40,7 +41,7 @@ pub(super) enum CadenceIcon {
 
 impl CadenceIcon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 30] = [
+    pub(super) const ALL: [Self; 31] = [
         Self::Heart,
         Self::HeartFilled,
         Self::Star,
@@ -59,6 +60,7 @@ impl CadenceIcon {
         Self::Pause,
         Self::Play,
         Self::SkipForward,
+        Self::Shuffle,
         Self::Key,
         Self::Settings,
         Self::SignOut,
@@ -93,6 +95,7 @@ impl CadenceIcon {
             Self::Pause => "pause",
             Self::Play => "play",
             Self::SkipForward => "skip-forward",
+            Self::Shuffle => "shuffle",
             Self::Key => "key",
             Self::Settings => "settings",
             Self::SignOut => "sign-out",

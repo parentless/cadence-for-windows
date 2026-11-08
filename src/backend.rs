@@ -282,7 +282,7 @@ pub enum BackendCommand {
     },
     SearchCatalog {
         query: String,
-        respond: Reply<TrackAndPlaylistResults>,
+        respond: Reply<crate::model::CatalogSearchResults>,
     },
     LoadPlaylist {
         playlist: Playlist,
@@ -339,6 +339,7 @@ pub enum BackendCommand {
         spotify_uri: String,
         position_ms: u32,
     },
+    SetShuffle(bool),
     SetVolume(f32),
     Shutdown {
         acknowledged: StdSender<()>,
@@ -1076,6 +1077,9 @@ struct Worker {
     account_generation: u64,
     catalog_generation: Arc<AtomicU64>,
     queue: PlayQueue,
+    shuffle: bool,
+    priority_next: usize,
+    history_end: usize,
     connection: PlaybackConnection,
     catalog: CatalogFetches,
     favorites: FavoriteRefresh,
@@ -1095,6 +1099,8 @@ impl Drop for Worker {
 
 impl Worker {
     fn new(startup: Startup, events: EventSender) -> Self {
+        let queue = PlayQueue::from_snapshot(startup.playback_snapshot);
+        let history_end = queue.index.unwrap_or(0);
         Self {
             events,
             store: startup.store,
@@ -1103,7 +1109,10 @@ impl Worker {
             playback_credentials_invalidated: startup.playback_credentials_invalidated,
             account_generation: 0,
             catalog_generation: Arc::new(AtomicU64::new(0)),
-            queue: PlayQueue::from_snapshot(startup.playback_snapshot),
+            queue,
+            history_end,
+            shuffle: false,
+            priority_next: 0,
             connection: PlaybackConnection::default(),
             catalog: CatalogFetches::default(),
             favorites: FavoriteRefresh::default(),
@@ -1295,6 +1304,10 @@ impl Worker {
             BackendCommand::Resume => self.resume().await,
             BackendCommand::Pause => self.pause().await,
             BackendCommand::MarkPlayed(track) => self.mark_played(track).await,
+            BackendCommand::SetShuffle(enabled) => {
+                self.shuffle = enabled;
+                Ok(())
+            }
             BackendCommand::Next => self.next_track().await,
             BackendCommand::Previous => self.previous_track().await,
             BackendCommand::Seek(position_ms) => self.seek(position_ms).await,
@@ -1519,6 +1532,8 @@ impl Worker {
                     self.playlist_cursor = cursor;
                 }
                 self.queue.tracks = tracks;
+                self.priority_next = 0;
+                self.history_end = index;
                 self.commit_loaded_queue(index).await;
             }
             Err(error) => {
@@ -1540,7 +1555,14 @@ impl Worker {
         let index = self.queue.index.context("Nothing is currently playing")?;
         let mut updated_tracks = self.queue.tracks.clone();
         updated_tracks.insert(index + 1, track);
-        self.replace_queue(updated_tracks, index).await
+        self.replace_queue(updated_tracks, index).await?;
+        if self.queue.index.unwrap_or(0) < self.history_end {
+            // Editing from an earlier track establishes a new upcoming queue.
+            self.history_end = self.queue.index.unwrap_or(0);
+            self.priority_next = 0;
+        }
+        self.priority_next += 1;
+        Ok(())
     }
 
     async fn append_to_queue(&mut self, track: Track) -> Result<()> {
@@ -1559,6 +1581,7 @@ impl Worker {
                 self.playlist_cursor.clone(),
             )
             .await?;
+        self.history_end = self.history_end.saturating_sub(prune);
         self.queue.tracks = tracks;
         self.queue.index = Some(index);
         send_playback_context(&self.queue.tracks, index, &self.events).await;
@@ -1688,7 +1711,20 @@ impl Worker {
             self.maybe_prefetch_autoplay();
             return Ok(());
         };
-        self.load_queue_track(index).await
+        // Shuffle only the loaded lookahead: no playlist-wide fetch, duplicate
+        // metadata, audio callback work, or changes to already-played history.
+        // Explicit Add to Queue / Play Next entries retain their priority.
+        let chosen = if self.shuffle && self.priority_next == 0 && current >= self.history_end {
+            fastrand::usize(index..self.queue.tracks.len())
+        } else {
+            index
+        };
+        self.queue.tracks[index..=chosen].rotate_right(1);
+        let result = self.load_queue_track(index).await;
+        if result.is_err() {
+            self.queue.tracks[index..=chosen].rotate_left(1);
+        }
+        result
     }
 
     async fn previous_track(&mut self) -> Result<()> {
@@ -1720,6 +1756,9 @@ impl Worker {
             let _ = self.events.send(BackendEvent::PlaybackSettled).await;
             return result;
         }
+        self.priority_next = self
+            .priority_next
+            .saturating_sub(index.saturating_sub(self.history_end));
         self.commit_loaded_queue(index).await;
         result
     }
@@ -1732,6 +1771,7 @@ impl Worker {
         self.queue.position_ms = 0;
         self.queue.ended = false;
         let prune = index.saturating_sub(PLAYED_TRACK_WINDOW);
+        self.history_end = self.history_end.max(index).saturating_sub(prune);
         self.queue.prune(prune);
         if let Err(error) = self
             .store
@@ -2059,7 +2099,7 @@ impl Worker {
             return;
         }
         if ended && self.queue.tracks.len() > old_len {
-            if let Err(error) = self.load_queue_track(index + 1).await {
+            if let Err(error) = self.next_track().await {
                 send_error(&self.events, error).await;
             }
         } else {
@@ -2195,10 +2235,7 @@ impl Worker {
         if ended {
             // The song outran the fetch: continue into the extension rather
             // than leaving playback parked on the ended state.
-            if let Err(error) = self
-                .load_queue_track(self.queue.index.unwrap_or(0) + 1)
-                .await
-            {
+            if let Err(error) = self.next_track().await {
                 send_error(&self.events, error).await;
             }
         }
@@ -2452,12 +2489,14 @@ impl CatalogFetches {
         ));
     }
 
-    fn search(&mut self, spotify: Spotify, query: String, respond: Reply<TrackAndPlaylistResults>) {
+    fn search(
+        &mut self,
+        spotify: Spotify,
+        query: String,
+        respond: Reply<crate::model::CatalogSearchResults>,
+    ) {
         Self::start(&mut self.search, respond, "Spotify search", async move {
-            tokio::try_join!(
-                spotify.search_tracks(&query),
-                spotify.search_playlists(&query)
-            )
+            spotify.search_catalog(&query).await
         });
     }
 
@@ -3377,8 +3416,19 @@ mod tests {
         worker.queue.tracks = vec![first.clone(), upcoming.clone()];
         worker.queue.index = Some(0);
         worker.queue.position_ms = 4321;
+        worker.shuffle = true;
         worker.append_to_queue(added.clone()).await.unwrap();
         assert_eq!(worker.queue.tracks, vec![first, added, upcoming]);
+        assert_eq!(worker.priority_next, 1);
+        let before_failure = worker.queue.tracks.clone();
+        assert!(worker.next_track().await.is_err()); // no audio connection
+        assert_eq!(worker.queue.tracks, before_failure);
+        assert_eq!(worker.priority_next, 1);
+        worker.priority_next = 0;
+        for _ in 0..20 {
+            assert!(worker.next_track().await.is_err());
+            assert_eq!(worker.queue.tracks, before_failure); // random rotation undone
+        }
         assert_eq!(worker.queue.index, Some(0));
         assert_eq!(worker.queue.position_ms, 4321);
         assert_eq!(worker.playlist_cursor, Some((playlist.clone(), 15)));

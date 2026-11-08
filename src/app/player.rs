@@ -15,6 +15,7 @@ pub(super) struct Player {
     now_playing: Option<model::Track>,
     context: Arc<[model::Track]>,
     playing: bool,
+    shuffle: bool,
     loading: bool,
     /// Position and play state to reapply once a reconnected player is ready.
     restore: Option<(u32, bool)>,
@@ -35,6 +36,7 @@ impl Player {
             now_playing: None,
             context: Arc::default(),
             playing: false,
+            shuffle: false,
             loading: false,
             restore: None,
             history_pending: false,
@@ -165,6 +167,18 @@ impl Player {
     pub(super) fn set_playing(&mut self, playing: bool, cx: &mut Context<Self>) {
         if self.playing != playing {
             self.toggle(cx);
+        }
+    }
+
+    pub(super) fn shuffle(&self) -> bool {
+        self.shuffle
+    }
+
+    pub(super) fn toggle_shuffle(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.shuffle;
+        if self.deliver(BackendCommand::SetShuffle(enabled), cx) {
+            self.shuffle = enabled;
+            cx.notify();
         }
     }
 

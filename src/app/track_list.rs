@@ -89,6 +89,19 @@ impl TrackList {
         self
     }
 
+    pub(super) fn scroll_handle(&self) -> gpui_kit::UniformListScrollHandle {
+        self.scroll.clone()
+    }
+
+    pub(super) fn restore_scroll(
+        &mut self,
+        scroll: gpui_kit::UniformListScrollHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.scroll = scroll;
+        cx.notify();
+    }
+
     /// Shows `tracks` under `id`, which pages vary per playlist or album so
     /// that opening a different one starts back at the top of the list.
     ///

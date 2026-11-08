@@ -349,6 +349,7 @@ impl Render for Toolbar {
                     .relative()
                     .child(
                         components::filled_button(palette, "account")
+                            .hover(|style| style.opacity(0.9))
                             .test_support()
                             .size_10()
                             .rounded_full()

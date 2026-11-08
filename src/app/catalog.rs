@@ -44,6 +44,7 @@ pub(super) struct SearchPage {
     kind: SearchKind,
     tracks: Arc<[model::Track]>,
     playlists: Arc<[model::Playlist]>,
+    artists: Arc<[model::Artist]>,
     loaded: bool,
     searching: bool,
     error: Option<SharedString>,
@@ -66,6 +67,7 @@ impl SearchPage {
             kind: SearchKind::Tracks,
             tracks: Arc::default(),
             playlists: Arc::default(),
+            artists: Arc::default(),
             loaded: false,
             searching: false,
             error: None,
@@ -109,10 +111,11 @@ impl SearchPage {
                 page.searching = false;
                 page.loaded = true;
                 match result {
-                    Ok((tracks, playlists)) => {
+                    Ok(results) => {
                         page.results_query = query;
-                        page.tracks = tracks.into();
-                        page.playlists = playlists.into();
+                        page.tracks = results.tracks.into();
+                        page.playlists = results.playlists.into();
+                        page.artists = results.artists.into();
                         page.error = None;
                         cx.emit(PageEvent::Loaded);
                     }
@@ -138,6 +141,7 @@ impl SearchPage {
         self.results_query.clear();
         self.tracks = Arc::default();
         self.playlists = Arc::default();
+        self.artists = Arc::default();
         self.loaded = false;
         self.searching = false;
         self.error = None;
@@ -145,8 +149,69 @@ impl SearchPage {
     }
 }
 
+// One inactive page per kind, plus the visible page. Metadata only; artwork
+// stays in the shared bounded image cache. Large pages are deliberately not
+// retained, and stale metadata follows the existing catalog freshness policy.
+const RETAINED_PAGE_TRACK_LIMIT: usize = 1_024;
+
+const RETAINED_PAGE_BYTES: usize = 2 * 1024 * 1024;
+
+fn can_retain_tracks(tracks: &[model::Track]) -> bool {
+    if tracks.len() > RETAINED_PAGE_TRACK_LIMIT {
+        return false;
+    }
+    let text_bytes = |value: &Option<String>| value.as_ref().map_or(0, String::capacity);
+    let mut bytes = std::mem::size_of_val(tracks);
+    for track in tracks {
+        bytes = bytes
+            .saturating_add(track.source_id.capacity())
+            .saturating_add(track.title.len())
+            .saturating_add(track.artist.len())
+            .saturating_add(track.album.len())
+            .saturating_add(text_bytes(&track.spotify_uri))
+            .saturating_add(text_bytes(&track.isrc))
+            .saturating_add(text_bytes(&track.artwork_url))
+            .saturating_add(track.artists.capacity() * std::mem::size_of::<model::ArtistRef>());
+        for artist in &track.artists {
+            bytes = bytes
+                .saturating_add(artist.name.len())
+                .saturating_add(text_bytes(&artist.source_id))
+                .saturating_add(text_bytes(&artist.spotify_uri));
+        }
+        if let Some(album) = &track.album_ref {
+            bytes = bytes
+                .saturating_add(album.name.len())
+                .saturating_add(text_bytes(&album.source_id))
+                .saturating_add(text_bytes(&album.spotify_uri))
+                .saturating_add(text_bytes(&album.artwork_url));
+        }
+        if bytes > RETAINED_PAGE_BYTES {
+            return false;
+        }
+    }
+    true
+}
+
+struct PlaylistSnapshot {
+    playlist: model::Playlist,
+    tracks: Rc<RefCell<Vec<model::Track>>>,
+    next_offset: Option<u32>,
+    scroll: gpui_kit::UniformListScrollHandle,
+    loaded_at: SystemTime,
+}
+
+struct AlbumSnapshot {
+    reference: model::AlbumRef,
+    album: Option<model::Album>,
+    tracks: Arc<[model::Track]>,
+    scroll: gpui_kit::UniformListScrollHandle,
+    loaded_at: SystemTime,
+}
+
 /// The tracks of one Spotify playlist.
 pub(super) struct PlaylistPage {
+    previous: Option<PlaylistSnapshot>,
+    loaded_at: Option<SystemTime>,
     backend: BackendHandle,
     pub(super) selected: Option<model::Playlist>,
     tracks: Rc<RefCell<Vec<model::Track>>>,
@@ -168,6 +233,8 @@ impl PlaylistPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
         let track_list = cx.new(|cx| TrackList::new(cx));
         Self {
+            previous: None,
+            loaded_at: None,
             backend,
             selected: None,
             tracks: Rc::default(),
@@ -206,6 +273,54 @@ impl PlaylistPage {
     }
 
     pub(super) fn open(&mut self, playlist: model::Playlist, cx: &mut Context<Self>) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|old| old.source_id == playlist.source_id)
+            && self.error.is_none()
+            && (self.request.is_some() || catalog_data_is_fresh(self.loaded_at))
+        {
+            return;
+        }
+        let previous = self.previous.take();
+        self.previous = self
+            .selected
+            .clone()
+            .filter(|_| {
+                self.loaded && self.error.is_none() && can_retain_tracks(&self.tracks.borrow())
+            })
+            .zip(self.loaded_at)
+            .map(|(playlist, loaded_at)| PlaylistSnapshot {
+                playlist,
+                tracks: self.tracks.clone(),
+                next_offset: self.next_offset,
+                scroll: self.track_list.read(cx).scroll_handle(),
+                loaded_at,
+            });
+        self.request = None;
+        if let Some(saved) = previous.filter(|saved| {
+            saved.playlist.source_id == playlist.source_id
+                && catalog_data_is_fresh(Some(saved.loaded_at))
+        }) {
+            self.selected = Some(saved.playlist.clone());
+            self.tracks = saved.tracks;
+            self.next_offset = saved.next_offset;
+            self.loaded_at = Some(saved.loaded_at);
+            self.loaded = true;
+            self.error = None;
+            self.track_list.update(cx, |list, cx| {
+                list.show_playlist(
+                    (ElementId::from("playlist-tracks"), playlist.source_id),
+                    self.tracks.clone(),
+                    cx,
+                );
+                list.set_playlist_context(saved.playlist, self.next_offset, false);
+                list.restore_scroll(saved.scroll, cx);
+            });
+            cx.notify();
+            return;
+        }
+        self.loaded_at = None;
         self.selected = Some(playlist.clone());
         self.tracks = Rc::default();
         self.track_list.update(cx, |list, cx| list.clear(cx));
@@ -247,6 +362,7 @@ impl PlaylistPage {
                 page.loaded = true;
                 match result {
                     Ok(result) => {
+                        page.loaded_at = Some(SystemTime::now());
                         page.next_offset = result.next_offset;
                         if let Some(playlist) = page.selected.as_mut() {
                             playlist.track_count = result.total;
@@ -271,6 +387,8 @@ impl PlaylistPage {
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        self.previous = None;
+        self.loaded_at = None;
         self.request = None;
         self.selected = None;
         self.tracks = Rc::default();
@@ -541,6 +659,7 @@ impl ArtistPage {
 
 /// One album and its tracks.
 pub(super) struct AlbumPage {
+    previous: Option<AlbumSnapshot>,
     backend: BackendHandle,
     reference: Option<model::AlbumRef>,
     album: Option<model::Album>,
@@ -561,6 +680,7 @@ impl AlbumPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
         let track_list = cx.new(|cx| TrackList::new(cx));
         Self {
+            previous: None,
             backend,
             reference: None,
             album: None,
@@ -602,6 +722,44 @@ impl AlbumPage {
             .as_ref()
             .and_then(|album| album.source_id.as_deref())
             == Some(source_id.as_str());
+        if !same_album {
+            let previous = self.previous.take();
+            self.previous = self
+                .reference
+                .clone()
+                .filter(|_| self.loaded && self.error.is_none() && can_retain_tracks(&self.tracks))
+                .zip(self.loaded_at)
+                .map(|(reference, loaded_at)| AlbumSnapshot {
+                    reference,
+                    album: self.album.clone(),
+                    tracks: self.tracks.clone(),
+                    scroll: self.track_list.read(cx).scroll_handle(),
+                    loaded_at,
+                });
+            self.request = None;
+            if let Some(saved) = previous.filter(|saved| {
+                saved.reference.source_id == album.source_id
+                    && catalog_data_is_fresh(Some(saved.loaded_at))
+            }) {
+                self.reference = Some(album);
+                self.album = saved.album;
+                self.tracks = saved.tracks;
+                self.loaded_at = Some(saved.loaded_at);
+                self.loaded = true;
+                self.error = None;
+                self.track_list.update(cx, |list, cx| {
+                    list.show(
+                        (ElementId::from("album-tracks"), source_id.clone()),
+                        self.tracks.clone(),
+                        cx,
+                    );
+                    list.set_current_album_id(Some(source_id), cx);
+                    list.restore_scroll(saved.scroll, cx);
+                });
+                cx.notify();
+                return true;
+            }
+        }
         let retrying_failure = same_album && self.error.is_some();
         let loading = self.request.is_some();
         let should_refresh = !same_album || (!loading && !catalog_data_is_fresh(self.loaded_at));
@@ -653,6 +811,8 @@ impl AlbumPage {
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        self.previous = None;
+        self.track_list.update(cx, |list, cx| list.clear(cx));
         self.request = None;
         self.reference = None;
         self.album = None;
@@ -699,6 +859,67 @@ impl Render for SearchPage {
             };
             components::empty_state(palette, message).into_any_element()
         };
+
+        let results =
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .when(
+                    kind == SearchKind::Tracks && !self.artists.is_empty() && !searching,
+                    |page| {
+                        let cache = services::AppServices::image_cache(cx);
+                        page.child(
+                            div()
+                                .mb_3()
+                                .child(components::section_label(palette, "Artists"))
+                                .child(div().mt_2().flex().gap_2().children(
+                                    self.artists.iter().take(3).enumerate().map(
+                                        |(index, artist)| {
+                                            let reference = model::ArtistRef {
+                                                name: artist.name.clone(),
+                                                source_id: Some(artist.source_id.clone()),
+                                                spotify_uri: artist.spotify_uri.clone(),
+                                            };
+                                            components::button(palette, ("search-artist", index))
+                                                .test_support()
+                                                .hover(|style| style.bg(rgb(palette.control)))
+                                                .test_support()
+                                                .h_16()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .px_3()
+                                                .gap_3()
+                                                .rounded_lg()
+                                                .justify_start()
+                                                .child(components::artwork(
+                                                    palette,
+                                                    &cache,
+                                                    artist.artwork_url.as_deref(),
+                                                    tokens::SIDEBAR_PLAYLIST_ARTWORK,
+                                                    CadenceIcon::Person,
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .text_ellipsis()
+                                                        .line_clamp(1)
+                                                        .child(artist.name.clone()),
+                                                )
+                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                    cx.emit(PageEvent::OpenArtist(
+                                                        reference.clone(),
+                                                    ))
+                                                }))
+                                        },
+                                    ),
+                                )),
+                        )
+                    },
+                )
+                .child(results);
 
         components::page("search-page")
             .pt_3()
@@ -1111,4 +1332,19 @@ impl Render for AlbumPage {
 /// The artwork-and-title band a detail page opens with.
 fn page_header() -> Div {
     div().flex().flex_none().items_center().gap_7().mb_6()
+}
+
+#[cfg(test)]
+mod retained_page_tests {
+    use super::*;
+
+    #[test]
+    fn inactive_pages_are_bounded_by_track_count_and_metadata_bytes() {
+        let mut track = crate::app::test_support::track(0);
+        assert!(can_retain_tracks(std::slice::from_ref(&track)));
+        track.source_id = "x".repeat(RETAINED_PAGE_BYTES);
+        assert!(!can_retain_tracks(std::slice::from_ref(&track)));
+        let tracks = vec![crate::app::test_support::track(0); RETAINED_PAGE_TRACK_LIMIT + 1];
+        assert!(!can_retain_tracks(&tracks));
+    }
 }
