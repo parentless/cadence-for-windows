@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy)]
 enum Scene {
     Artist,
+    ArtistMenu,
     ArtistPortrait,
     ArtistLandscape,
     Settings,
@@ -130,7 +131,10 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         let (handle, workspace) = workspace(&mut cx, width, height);
         cx.update(|cx| {
             workspace.update(cx, |workspace, cx| match scene {
-                Scene::Artist | Scene::ArtistPortrait | Scene::ArtistLandscape => {
+                Scene::Artist
+                | Scene::ArtistMenu
+                | Scene::ArtistPortrait
+                | Scene::ArtistLandscape => {
                     let (image_width, image_height) = match scene {
                         Scene::ArtistPortrait => (360, 1080),
                         Scene::ArtistLandscape => (1080, 360),
@@ -203,6 +207,38 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         .expect("activate fixture window");
     settle(&mut cx, handle.into());
     match scene {
+        Scene::ArtistMenu => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                let position = window.find("account").bounds().center();
+                window.dispatch_event(
+                    MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                window.dispatch_event(
+                    MouseUpEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            })
+            .expect("open artist account menu");
+            settle(&mut cx, handle.into());
+            cx.update_window(handle.into(), |_, window, _| {
+                assert!(window.find("account-settings").bounds().size.height > px(0.));
+            })
+            .expect("artist menu is visible over backdrop");
+        }
         Scene::SearchEntered => {
             press_key(
                 &mut cx,
@@ -314,7 +350,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     }
     if matches!(
         scene,
-        Scene::Artist | Scene::ArtistPortrait | Scene::ArtistLandscape
+        Scene::Artist | Scene::ArtistMenu | Scene::ArtistPortrait | Scene::ArtistLandscape
     ) {
         cx.update_window(handle.into(), |_, window, _| {
             let bounds = window.find("artist-portrait").bounds();
@@ -417,6 +453,12 @@ pub(crate) fn run() {
             );
             let path = previews.join(format!("artist-overlay-{layout}-preview.png"));
             save_artifact(&image, &path);
+            println!("{}", path.display());
+            let menu = capture(Scene::ArtistMenu, ThemePreference::Dark, width);
+            let repeated = capture(Scene::ArtistMenu, ThemePreference::Dark, width);
+            assert!(compare("artist-menu-repeat", &menu, &repeated, &previews));
+            let path = previews.join(format!("artist-glass-menu-{layout}-preview.png"));
+            save_artifact(&menu, &path);
             println!("{}", path.display());
         }
         return;
