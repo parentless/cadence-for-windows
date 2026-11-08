@@ -242,8 +242,14 @@ impl Workspace {
     fn settle_navigation(&mut self, cx: &mut Context<Self>) {
         let route = self.router.route();
         let pinned_origin = self.router.pinned_origin();
+        let active_playlist = self
+            .playlist
+            .read(cx)
+            .selected
+            .as_ref()
+            .map(|p| p.source_id.clone());
         self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.show_route(route, pinned_origin, cx)
+            sidebar.show_route(route, pinned_origin, active_playlist, cx)
         });
         self.close_queue(cx);
         self.close_account_menu(cx);

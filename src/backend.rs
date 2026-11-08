@@ -1544,10 +1544,7 @@ impl Worker {
     }
 
     async fn append_to_queue(&mut self, track: Track) -> Result<()> {
-        let index = self.queue.index.context("Nothing is currently playing")?;
-        let mut updated_tracks = self.queue.tracks.clone();
-        updated_tracks.push(track);
-        self.replace_queue(updated_tracks, index).await
+        self.play_next(track).await
     }
 
     async fn replace_queue(&mut self, mut tracks: Vec<Track>, index: usize) -> Result<()> {
@@ -3340,6 +3337,62 @@ mod tests {
             control_receiver.try_recv(),
             Ok(BackendCommand::Logout { generation: 1 })
         ));
+    }
+
+    #[tokio::test]
+    async fn adding_to_queue_inserts_next_without_replacing_playlist_cursor() {
+        let (_, shutdown) = tokio::sync::watch::channel(false);
+        let (events, _receiver) = super::event_channel(shutdown);
+        let store = BlockingStore::from_store(Store::in_memory().unwrap());
+        let playlist = crate::model::Playlist {
+            provider: Provider::Spotify,
+            source_id: "playlist".into(),
+            name: "Playlist".into(),
+            owner: "Owner".into(),
+            track_count: 100,
+            artwork_url: None,
+        };
+        let mut worker = super::Worker::new(
+            super::Startup {
+                store: store.clone(),
+                spotify: crate::spotify::Spotify::from_client_id(
+                    "00000000000000000000000000000000",
+                    false,
+                )
+                .await
+                .unwrap(),
+                configuration: None,
+                playback_snapshot: None,
+                playback_credentials_invalidated: false,
+                playlist_cursor: Some((playlist.clone(), 15)),
+            },
+            events,
+        );
+        let mut first = favorite();
+        first.source_id = "current".into();
+        let mut upcoming = favorite();
+        upcoming.source_id = "upcoming".into();
+        let mut added = favorite();
+        added.source_id = "added".into();
+        worker.queue.tracks = vec![first.clone(), upcoming.clone()];
+        worker.queue.index = Some(0);
+        worker.queue.position_ms = 4321;
+        worker.append_to_queue(added.clone()).await.unwrap();
+        assert_eq!(worker.queue.tracks, vec![first, added, upcoming]);
+        assert_eq!(worker.queue.index, Some(0));
+        assert_eq!(worker.queue.position_ms, 4321);
+        assert_eq!(worker.playlist_cursor, Some((playlist.clone(), 15)));
+        assert_eq!(
+            store.playback_state().await.unwrap().unwrap().tracks,
+            worker.queue.tracks
+        );
+        assert_eq!(
+            store
+                .call(|store| store.playback_playlist_cursor())
+                .await
+                .unwrap(),
+            Some((playlist, 15))
+        );
     }
 
     #[tokio::test]

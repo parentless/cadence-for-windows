@@ -148,7 +148,7 @@ impl SearchPage {
 /// The tracks of one Spotify playlist.
 pub(super) struct PlaylistPage {
     backend: BackendHandle,
-    selected: Option<model::Playlist>,
+    pub(super) selected: Option<model::Playlist>,
     tracks: Rc<RefCell<Vec<model::Track>>>,
     loaded: bool,
     next_offset: Option<u32>,

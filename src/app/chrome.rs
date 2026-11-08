@@ -25,6 +25,9 @@ pub(super) struct Toolbar {
     /// The workspace's standing failure, shown under the account name.
     error: Option<SharedString>,
     _search_subscription: Subscription,
+    _update_subscription: Option<Subscription>,
+    update_version: Option<String>,
+    update_generation: usize,
 }
 
 impl EventEmitter<ToolbarEvent> for Toolbar {}
@@ -44,7 +47,27 @@ impl Toolbar {
                 _ => {}
             },
         );
+        let update_subscription = updater::status(cx).map(|status| {
+            cx.observe(&status, |this, status, cx| {
+                let version = match &status.read(cx).check {
+                    updater::UpdateCheck::Available(version) => Some(version.clone()),
+                    _ => None,
+                };
+                if this.update_version != version {
+                    this.update_version = version;
+                    this.update_generation = this.update_generation.wrapping_add(1);
+                    cx.notify();
+                }
+            })
+        });
+        let update_version = updater::status(cx).and_then(|status| match &status.read(cx).check {
+            updater::UpdateCheck::Available(version) => Some(version.clone()),
+            _ => None,
+        });
         Self {
+            _update_subscription: update_subscription,
+            update_version,
+            update_generation: 0,
             search_input,
             menu_open: false,
             session: services::AppServices::session(cx),
@@ -54,6 +77,13 @@ impl Toolbar {
             error: None,
             _search_subscription: search_subscription,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn seed_update_available(&mut self, cx: &mut Context<Self>) {
+        self.update_version = Some("9.9.9".into());
+        self.update_generation += 1;
+        cx.notify();
     }
 
     /// Pushes the workspace state the toolbar reflects but does not own.
@@ -102,6 +132,7 @@ impl Toolbar {
         };
         components::glass_search_frame(palette, &self.search_input, window, cx)
             .id("search-field")
+            .test_support()
             .w(width)
             .h_10()
             .justify_start()
@@ -337,6 +368,38 @@ impl Render for Toolbar {
                                 cx.notify();
                             })),
                     )
+                    .when(self.update_version.is_some(), |anchor| {
+                        anchor.child(
+                            components::bare_button("update-available")
+                                .test_support()
+                                .absolute()
+                                .right_0()
+                                .top_0()
+                                .size_3()
+                                .rounded_full()
+                                .bg(rgb(0xF04452))
+                                .aria_label("Update available — open Settings")
+                                .tooltip(|window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new("Update available")
+                                        .build(window, cx)
+                                })
+                                .on_click(
+                                    cx.listener(|_, _, _, cx| cx.emit(ToolbarEvent::OpenSettings)),
+                                )
+                                .with_animation(
+                                    ("update-arrived", self.update_generation),
+                                    Animation::new(Duration::from_millis(650)),
+                                    |badge, progress| {
+                                        // One short jump on arrival, then a static dot. No repeating timer.
+                                        let jump =
+                                            (progress * std::f32::consts::PI * 2.).sin().abs()
+                                                * (1. - progress)
+                                                * 6.;
+                                        badge.top(px(-jump))
+                                    },
+                                ),
+                        )
+                    })
                     .when(self.menu_open, |anchor| {
                         anchor.child(deferred(self.account_menu(palette, cx)))
                     }),

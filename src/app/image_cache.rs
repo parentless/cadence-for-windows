@@ -92,6 +92,23 @@ pub(super) struct BoundedImageCache {
 }
 
 impl BoundedImageCache {
+    pub(super) fn usage(&self) -> (usize, usize, bool) {
+        (self.decoded_bytes, MAX_DECODED_BYTES, self.evictions > 0)
+    }
+
+    /// Cancels pending requests and releases decoded/GPU artwork. The cache owns
+    /// no credentials or audio files; visible artwork can be requested again.
+    pub(super) fn clear(&mut self, window: &mut Window, cx: &mut App) {
+        for (_, entry) in self.items.drain() {
+            if let CacheEntry::Loaded { image, .. } = entry {
+                cx.drop_image(image, Some(window));
+            }
+        }
+        self.recency.clear();
+        self.decoded_bytes = 0;
+        self.evictions = 0;
+    }
+
     pub(super) fn new(cx: &mut App) -> Entity<Self> {
         let cache = cx.new(|_| Self {
             items: HashMap::new(),

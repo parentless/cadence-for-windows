@@ -61,6 +61,7 @@ pub(super) struct Settings {
     discord_focus: FocusHandle,
     discord_application_id: Entity<InputState>,
     discord_error: Option<SharedString>,
+    cache_cleared: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -120,6 +121,7 @@ impl Settings {
             discord_focus: cx.focus_handle(),
             discord_application_id,
             discord_error: None,
+            cache_cleared: false,
             _subscriptions: subscriptions,
         }
     }
@@ -144,7 +146,7 @@ impl Settings {
         &self.autoplay_focus
     }
 
-    fn page(&mut self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn page(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = appearance::Appearance::palette(cx);
         let session = self.session.read(cx);
         let saved_configuration = session.client_id_source() == Some(ClientIdSource::Saved);
@@ -156,7 +158,7 @@ impl Settings {
         let autoplay = preferences.autoplay;
 
         div()
-            .id("settings-page")
+            .id("settings-page").test_support()
             .size_full()
             .overflow_y_scroll()
             .child(
@@ -385,7 +387,8 @@ impl Settings {
                             ),
                     )
                     .child(self.discord_section(palette, window, cx))
-                    .child(self.updates_section(palette, window, cx)),
+                    .child(self.updates_section(palette, window, cx))
+                    .child(self.cache_section(palette, cx)),
             )
     }
 
@@ -577,6 +580,53 @@ impl Settings {
                         .when(busy, |button| button.opacity(0.6)),
                 )
             })
+    }
+
+    fn cache_section(&self, palette: CadencePalette, cx: &mut Context<Self>) -> Div {
+        let cache = services::AppServices::image_cache(cx);
+        let (bytes, limit, reclaimed) = cache.read(cx).usage();
+        let detail = if self.cache_cleared {
+            "Cache cleared. Visible artwork reloads as needed.".to_owned()
+        } else if reclaimed {
+            "Older artwork has been cleared automatically to keep memory bounded.".to_owned()
+        } else {
+            format!(
+                "Artwork uses {:.1} MiB of {} MiB. Older images are removed automatically; manual cleanup is optional.",
+                bytes as f64 / 1_048_576.,
+                limit / 1_048_576
+            )
+        };
+        div()
+            .mt_8()
+            .child(Self::settings_section_header(
+                palette,
+                "Cache",
+                "Artwork memory is managed automatically.",
+            ))
+            .child(
+                div()
+                    .mt_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .text_color(rgb(palette.text_muted))
+                            .child(detail),
+                    )
+                    .child(
+                        components::settings_button(palette, "settings-clear-cache", "Clear cache")
+                            .test_support()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cache.update(cx, |cache, cx| cache.clear(window, cx));
+                                this.cache_cleared = true;
+                                cx.refresh_windows();
+                            })),
+                    ),
+            )
     }
 
     fn settings_section_header(

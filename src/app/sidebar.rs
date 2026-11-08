@@ -71,6 +71,13 @@ pub(super) struct Sidebar {
     brand_mark: Arc<gpui_kit::Image>,
     image_cache: Entity<image_cache::BoundedImageCache>,
     playlist_hover: components::HoverHighlight,
+    playlist_source: Arc<[model::Playlist]>,
+    playlist_order: Arc<[usize]>,
+    playlist_scroll: gpui_kit::UniformListScrollHandle,
+    active_playlist: Option<String>,
+    reorder_generation: usize,
+    reorder_position: usize,
+    reorder_started: Option<std::time::Instant>,
     /// The route to highlight, pushed by the workspace when it navigates.
     route: Route,
     /// Where a pinned playlist should return to when the listener backs out.
@@ -99,6 +106,10 @@ fn expanded_sidebar_width(compact_layout: bool) -> Rems {
     }
 }
 
+fn item_label(index: usize) -> &'static str {
+    NAV_ITEMS[index].label
+}
+
 impl Sidebar {
     pub(super) fn new(collapsed: bool, cx: &mut App) -> Self {
         let width = if collapsed {
@@ -110,6 +121,13 @@ impl Sidebar {
             library: services::AppServices::library(cx),
             image_cache: services::AppServices::image_cache(cx),
             playlist_hover: components::HoverHighlight::default(),
+            playlist_source: Arc::from([]),
+            playlist_order: Arc::from([]),
+            playlist_scroll: gpui_kit::UniformListScrollHandle::new(),
+            active_playlist: None,
+            reorder_generation: 0,
+            reorder_position: 0,
+            reorder_started: None,
             brand_mark: services::AppServices::brand_mark(cx),
             route: Route::LikedSongs,
             pinned_origin: Route::LikedSongs,
@@ -129,13 +147,44 @@ impl Sidebar {
         &mut self,
         route: Route,
         pinned_origin: Route,
+        active_playlist: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        if self.route != route || self.pinned_origin != pinned_origin {
+        if self.route != route
+            || self.pinned_origin != pinned_origin
+            || self.active_playlist != active_playlist
+        {
+            if route == Route::Playlist
+                && self.active_playlist != active_playlist
+                && let Some(position) = self.playlist_order.iter().position(|index| {
+                    Some(self.playlist_source[*index].source_id.as_str())
+                        == active_playlist.as_deref()
+                })
+                && position > 0
+            {
+                self.promote_playlist(position, cx);
+            }
+            self.active_playlist = active_playlist;
             self.route = route;
             self.pinned_origin = pinned_origin;
             cx.notify();
         }
+    }
+
+    fn promote_playlist(&mut self, position: usize, cx: &mut Context<Self>) {
+        if position == 0 {
+            return;
+        }
+        let mut order = self.playlist_order.to_vec();
+        self.reorder_position = position;
+        self.reorder_started = Some(cx.background_executor().now());
+        let index = order.remove(position);
+        order.insert(0, index);
+        self.playlist_order = order.into();
+        self.playlist_scroll
+            .scroll_to_item(0, gpui_kit::ScrollStrategy::Top);
+        self.reorder_generation = self.reorder_generation.wrapping_add(1);
+        cx.notify();
     }
 
     pub(super) fn set_compact_layout(&mut self, compact: bool, cx: &mut Context<Self>) {
@@ -180,7 +229,7 @@ impl Sidebar {
         focus_handle: &FocusHandle,
         transition: &RowTransition,
         palette: CadencePalette,
-        window: &Window,
+        window: &mut Window,
         cx: &Context<Self>,
     ) -> AnyElement {
         let index = NAV_ITEMS
@@ -189,12 +238,24 @@ impl Sidebar {
             .unwrap_or(0);
         let route = self.route;
         let target = item.route;
-        let selected = route == target || (target == Route::Playlists && route == Route::Playlist);
+        let selected = route == target;
         let glyph = if selected {
             item.selected_icon
         } else {
             item.icon
         };
+        let base = if selected {
+            palette.selection
+        } else {
+            palette.canvas
+        };
+        let fill_color = self
+            .hover
+            .transition(index, cx.background_executor().now())
+            .map_or_else(
+                || rgb(base),
+                |hover| hover.color(window, base, palette.control_hover, cx.reduce_motion()),
+            );
         let focus_visible = components::is_focus_visible(focus_handle, window);
         let start_progress = transition.start_progress;
         let target_progress = transition.target_progress;
@@ -209,7 +270,7 @@ impl Sidebar {
             .items_center()
             .gap_3()
             .pr(NAV_ROW_PAD)
-            .when(selected, |fill| fill.bg(rgb(palette.selection)))
+            .bg(fill_color)
             .when(focus_visible, |fill| {
                 fill.shadow(components::inset_focus_ring(palette))
             })
@@ -242,28 +303,10 @@ impl Sidebar {
                     fill.w(width).ml(left).pl(pad)
                 },
             );
-        // Apply the hover fill outside the collapse geometry so neither animation
-        // restarts the other, and the keyboard focus ring stays inside the fill.
-        let fill = div().flex().items_center().rounded_xl().child(fill);
-        let fill = if let Some(hover) = self.hover.transition(index, cx.background_executor().now())
-        {
-            hover.apply(
-                fill.id(("nav-hover", index)),
-                index,
-                if selected {
-                    palette.selection
-                } else {
-                    palette.canvas
-                },
-                palette.control_hover,
-                cx.reduce_motion(),
-            )
-        } else {
-            fill.into_any_element()
-        };
         components::bare_button(item.id)
             .test_support()
             .track_focus(focus_handle)
+            .aria_selected(selected)
             .w_full()
             .h(tokens::NAV_ROW_HEIGHT)
             .justify_start()
@@ -280,11 +323,16 @@ impl Sidebar {
                     .set(index, *hovered, cx.background_executor().now());
                 cx.notify();
             }))
+            .when(self.collapsed, |row| {
+                row.tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(item_label(index)).build(window, cx)
+                })
+            })
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::Navigate(target))))
             .into_any_element()
     }
 
-    fn panel(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = appearance::Appearance::palette(cx);
         let collapsed = self.collapsed;
         let pinned_origin = self.pinned_origin;
@@ -324,24 +372,64 @@ impl Sidebar {
         } else {
             library.playlists().clone()
         };
+        if !Arc::ptr_eq(&self.playlist_source, &playlists) {
+            self.playlist_source = playlists.clone();
+            self.playlist_order = (0..playlists.len()).collect::<Vec<_>>().into();
+            self.playlist_hover = components::HoverHighlight::default();
+        }
+        let order = self.playlist_order.clone();
+        let active_playlist = if self.route == Route::Playlist {
+            self.active_playlist.clone()
+        } else {
+            None
+        };
+        let reorder_generation = self.reorder_generation;
+        let reorder_position = self.reorder_position;
         let show_pinned = !playlists.is_empty();
         let reduce_motion = cx.reduce_motion();
+        let reorder_progress = if reduce_motion {
+            1.
+        } else {
+            self.reorder_started.map_or(1., |start| {
+                (cx.background_executor()
+                    .now()
+                    .saturating_duration_since(start)
+                    .as_secs_f32()
+                    / 0.14)
+                    .clamp(0., 1.)
+            })
+        };
+        if reorder_progress < 1. {
+            window.request_animation_frame();
+        }
+        let reorder_progress = ease_out_quint()(reorder_progress);
         let pinned_section = div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
             .gap_2()
-            .child(components::section_label(palette, "Playlists"))
+            .when(!collapsed, |section| {
+                section.child(components::section_label(palette, "Playlists"))
+            })
             .child(
                 uniform_list(
                     "sidebar-playlists",
                     playlists.len(),
-                    cx.processor(move |this, range: Range<usize>, _, cx| {
+                    cx.processor(move |this, range: Range<usize>, window, cx| {
                         range
-                            .filter_map(|index| {
+                            .filter_map(|position| {
+                                let index = order[position];
                                 playlists.get(index).cloned().map(|playlist| {
                                     let selected_playlist = playlist.clone();
+                                    let label = playlist.name.clone();
+                                    let selected = active_playlist.as_deref()
+                                        == Some(playlist.source_id.as_str());
+                                    let base = if selected {
+                                        palette.selection
+                                    } else {
+                                        palette.canvas
+                                    };
                                     let pinned = services::AppServices::library(cx)
                                         .read(cx)
                                         .is_playlist_pinned(&playlist);
@@ -360,9 +448,12 @@ impl Sidebar {
                                     .h_11()
                                     .w_full()
                                     .min_w_0()
-                                    .px_3()
+                                    .when(!collapsed, |row| row.px_3())
+                                    .bg(rgb(base))
+                                    .aria_selected(selected)
                                     .rounded_lg()
                                     .justify_start()
+                                    .when(collapsed, |row| row.justify_center())
                                     .gap_2()
                                     .text_sm()
                                     .text_color(rgb(palette.text))
@@ -373,21 +464,31 @@ impl Sidebar {
                                         tokens::SIDEBAR_PLAYLIST_ARTWORK,
                                         CadenceIcon::Playlist,
                                     ))
-                                    .when(pinned, |row| {
+                                    .when(pinned && !collapsed, |row| {
                                         row.child(components::icon(
                                             CadenceIcon::PinFilled,
                                             Rems(0.625),
                                             palette.text_muted,
                                         ))
                                     })
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_ellipsis()
-                                            .line_clamp(1)
-                                            .child(playlist.name),
-                                    )
+                                    .when(!collapsed, |row| {
+                                        row.child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_ellipsis()
+                                                .line_clamp(1)
+                                                .child(playlist.name),
+                                        )
+                                    })
+                                    .when(collapsed, |row| {
+                                        row.tooltip(move |window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                label.clone(),
+                                            )
+                                            .build(window, cx)
+                                        })
+                                    })
                                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                         this.playlist_hover.set(
                                             index,
@@ -396,31 +497,52 @@ impl Sidebar {
                                         );
                                         cx.notify();
                                     }))
-                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(position) =
+                                            this.playlist_order.iter().position(|id| *id == index)
+                                        {
+                                            this.promote_playlist(position, cx);
+                                        }
                                         cx.emit(SidebarEvent::OpenPlaylist {
                                             playlist: selected_playlist.clone(),
                                             origin: pinned_origin,
                                         })
                                     }));
-                                    if let Some(hover) = this
+                                    let row = if let Some(hover) = this
                                         .playlist_hover
                                         .transition(index, cx.background_executor().now())
                                     {
                                         hover.apply(
                                             row,
-                                            index,
-                                            palette.canvas,
+                                            window,
+                                            base,
                                             palette.control_hover,
                                             reduce_motion,
                                         )
                                     } else {
                                         row.into_any_element()
-                                    }
+                                    };
+                                    let offset = if reorder_generation == 0 {
+                                        0.
+                                    } else if position == 0 {
+                                        reorder_position as f32
+                                    } else if position <= reorder_position {
+                                        -1.
+                                    } else {
+                                        0.
+                                    };
+                                    div()
+                                        .relative()
+                                        .w_full()
+                                        .top(Rems(offset * 2.75 * (1. - reorder_progress)))
+                                        .child(row)
+                                        .into_any_element()
                                 })
                             })
                             .collect()
                     }),
                 )
+                .track_scroll(&self.playlist_scroll)
                 .flex_1()
                 .min_h_0(),
             );
@@ -494,6 +616,14 @@ impl Sidebar {
             .text_color(rgb(palette.text_primary))
             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
             .child(brand_fill)
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(if collapsed {
+                    "Expand sidebar"
+                } else {
+                    "Collapse sidebar"
+                })
+                .build(window, cx)
+            })
             .on_click(cx.listener(|this, _, _, cx| {
                 let collapsed = !this.collapsed;
                 this.set_collapsed(collapsed, cx);
@@ -509,7 +639,7 @@ impl Sidebar {
             .border_color(rgb(palette.border))
             .child(
                 div()
-                    .w(expanded_width)
+                    .w(target_width)
                     .h_full()
                     .flex_none()
                     .flex()
@@ -541,7 +671,7 @@ impl Sidebar {
                             )
                             .children(nav_rows),
                     )
-                    .when(show_pinned && !collapsed, |sidebar| {
+                    .when(show_pinned, |sidebar| {
                         sidebar.child(
                             div()
                                 .flex_1()
@@ -553,15 +683,16 @@ impl Sidebar {
                                     ("sidebar-pinned", animation_id),
                                     row_animation.clone(),
                                     move |pinned, delta| {
-                                        pinned
-                                            .opacity(start_progress + (1. - start_progress) * delta)
+                                        pinned.opacity(if collapsed {
+                                            1.
+                                        } else {
+                                            start_progress + (1. - start_progress) * delta
+                                        })
                                     },
                                 ),
                         )
                     })
-                    .when(!show_pinned || collapsed, |panel| {
-                        panel.child(div().flex_1())
-                    }),
+                    .when(!show_pinned, |panel| panel.child(div().flex_1())),
             )
             .with_animation(
                 ("sidebar-width", animation_id),

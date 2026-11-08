@@ -10,6 +10,8 @@ enum Scene {
     PlaylistsLoading,
     PlaylistTracks,
     PlaylistHover,
+    PlaylistCollapsed,
+    UpdateAvailable,
     PlaylistZoomSmall,
     PlaylistZoomLarge,
     ArtistMenu,
@@ -19,6 +21,7 @@ enum Scene {
     Settings,
     SettingsAutoplayOff,
     SettingsMenu,
+    SettingsCache,
     Setup,
     SetupFilled,
     SearchEntered,
@@ -40,9 +43,12 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("playlists-loading", Scene::PlaylistsLoading),
         ("playlist-tracks", Scene::PlaylistTracks),
         ("sidebar-playlist-hover", Scene::PlaylistHover),
+        ("sidebar-collapsed", Scene::PlaylistCollapsed),
+        ("update-available", Scene::UpdateAvailable),
         ("playlist-zoom-small", Scene::PlaylistZoomSmall),
         ("playlist-zoom-large", Scene::PlaylistZoomLarge),
         ("settings", Scene::Settings),
+        ("settings-cache", Scene::SettingsCache),
         ("settings-autoplay-off", Scene::SettingsAutoplayOff),
         ("settings-mascot-open", Scene::SettingsMenu),
         ("setup", Scene::Setup),
@@ -213,7 +219,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     workspace.library.update(cx, |library, cx| library.clear(cx));
                     workspace.navigate(Route::Playlists, cx);
                 }
-                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge => {
+                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed => {
                     let artwork_url = "https://fixtures.invalid/sidebar-cover.png";
                     let cover = image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([45 + (x*2) as u8, 50 + (y*2) as u8, 160, 255]));
                     services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(artwork_url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(cover)]))));
@@ -228,6 +234,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     }).collect();
                     let selected = playlists[0].clone();
                     workspace.library.update(cx, |library, cx| { library.handle_backend_event(BackendEvent::LibraryLoaded { generation: 0, liked_tracks: vec![track(0)], playlists }, 0, cx); });
+                    if matches!(scene, Scene::PlaylistCollapsed) { workspace.sidebar.update(cx, |sidebar, cx| sidebar.set_collapsed(true, cx)); }
                     workspace.load_playlist(selected, cx);
                     workspace.navigate(Route::Playlist, cx);
                     match backend.commands.try_recv().expect("playlist request") {
@@ -235,7 +242,8 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                         _ => panic!("expected playlist request"),
                     }
                 }
-                Scene::Settings | Scene::SettingsAutoplayOff | Scene::SettingsMenu => {
+                Scene::UpdateAvailable => { workspace.toolbar.update(cx, |toolbar, cx| toolbar.seed_update_available(cx)); }
+                Scene::Settings | Scene::SettingsAutoplayOff | Scene::SettingsMenu | Scene::SettingsCache => {
                     workspace.open_settings(cx);
                     if matches!(scene, Scene::SettingsAutoplayOff) {
                         services::AppServices::set_autoplay(false, cx)
@@ -259,6 +267,23 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         .expect("activate fixture window");
     settle(&mut cx, handle.into());
     match scene {
+        Scene::SettingsCache => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                let position = window.find("settings-page").bounds().center();
+                window.dispatch_event(
+                    gpui_kit::ScrollWheelEvent {
+                        position,
+                        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+                        modifiers: Default::default(),
+                        touch_phase: gpui_kit::TouchPhase::Moved,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
         Scene::PlaylistHover => {
             cx.update_window(handle.into(), |_, window, cx| {
                 window.hover(("sidebar-playlist", 0usize), cx)

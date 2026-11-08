@@ -603,7 +603,6 @@ pub(super) struct HoverHighlight {
     hovered: Option<usize>,
     previous: Option<(usize, f32)>,
     started: Option<std::time::Instant>,
-    generation: usize,
 }
 
 impl HoverHighlight {
@@ -619,13 +618,21 @@ impl HoverHighlight {
             return;
         }
         let progress = self.progress(now);
-        self.previous = self.hovered.map(|old| (old, progress)).or_else(|| {
-            self.previous
-                .map(|(old, alpha)| (old, alpha * (1. - progress)))
-        });
+        self.previous = self
+            .hovered
+            .map(|old| {
+                let from = self
+                    .previous
+                    .filter(|(id, _)| *id == old)
+                    .map_or(0., |(_, alpha)| alpha);
+                (old, from + (1. - from) * progress)
+            })
+            .or_else(|| {
+                self.previous
+                    .map(|(old, alpha)| (old, alpha * (1. - progress)))
+            });
         self.hovered = hovered.then_some(index);
         self.started = Some(now);
-        self.generation = self.generation.wrapping_add(1);
     }
 
     pub(super) fn transition(
@@ -643,7 +650,6 @@ impl HoverHighlight {
         }
         let progress = self.progress(now);
         Some(HoverTransition {
-            generation: self.generation,
             from: from + (target - from) * progress,
             target,
             remaining: HOVER_FADE.mul_f32(1. - progress),
@@ -652,40 +658,86 @@ impl HoverHighlight {
 }
 
 pub(super) struct HoverTransition {
-    generation: usize,
     from: f32,
     target: f32,
     remaining: Duration,
 }
 
 impl HoverTransition {
+    pub(super) fn color(
+        self,
+        window: &mut Window,
+        base: u32,
+        highlight: u32,
+        reduce_motion: bool,
+    ) -> gpui_kit::Rgba {
+        if !reduce_motion && !self.remaining.is_zero() {
+            let view = window.current_view();
+            window.on_next_frame(move |_, cx| cx.notify(view));
+        }
+        let alpha = if reduce_motion {
+            self.target
+        } else {
+            self.from
+        };
+        let channel = |shift| {
+            let a = ((base >> shift) & 255u32) as f32;
+            let b = ((highlight >> shift) & 255u32) as f32;
+            (a + (b - a) * alpha).round() as u32
+        };
+        rgb((channel(16) << 16) | (channel(8) << 8) | channel(0))
+    }
+
     pub(super) fn apply<T: Styled + IntoElement + 'static>(
         self,
         row: T,
-        id: usize,
+        window: &mut Window,
         base: u32,
         highlight: u32,
         reduce_motion: bool,
     ) -> AnyElement {
-        let color = move |alpha: f32| {
-            let channel = |shift| {
-                let a = ((base >> shift) & 255u32) as f32;
-                let b = ((highlight >> shift) & 255u32) as f32;
-                (a + (b - a) * alpha).round() as u32
-            };
-            rgb((channel(16) << 16) | (channel(8) << 8) | channel(0))
-        };
-        if reduce_motion || self.remaining.is_zero() {
-            return row.bg(color(self.target)).into_any_element();
-        }
-        row.with_animation(
-            (
-                "row-hover",
-                id.wrapping_mul(31).wrapping_add(self.generation),
-            ),
-            Animation::new(self.remaining),
-            move |row, progress| row.bg(color(self.from + (self.target - self.from) * progress)),
-        )
-        .into_any_element()
+        // Only the color changes: pointer tracking and nested controls retain identity.
+        row.bg(self.color(window, base, highlight, reduce_motion))
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod hover_tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_hover_is_continuous_and_settles_without_frame_demand() {
+        let mut hover = HoverHighlight::default();
+        let start = std::time::Instant::now();
+        hover.set(0, true, start);
+        let halfway = start + HOVER_FADE / 2;
+        let before = hover.transition(0, halfway).unwrap().from;
+        hover.set(0, false, halfway);
+        assert_eq!(hover.transition(0, halfway).unwrap().from, before);
+        let returning = halfway + HOVER_FADE / 2;
+        let faded = hover.transition(0, returning).unwrap().from;
+        hover.set(0, true, returning);
+        assert_eq!(hover.transition(0, returning).unwrap().from, faded);
+        let settled = hover.transition(0, returning + HOVER_FADE).unwrap();
+        assert_eq!(settled.from, 1.);
+        assert!(settled.remaining.is_zero());
+        // Repeated hover reports don't restart a completed transition.
+        hover.set(0, true, returning + HOVER_FADE);
+        assert!(
+            hover
+                .transition(0, returning + HOVER_FADE)
+                .unwrap()
+                .remaining
+                .is_zero()
+        );
+        hover.set(0, false, returning + HOVER_FADE);
+        assert_eq!(
+            hover
+                .transition(0, returning + HOVER_FADE * 2)
+                .unwrap()
+                .from,
+            0.
+        );
     }
 }

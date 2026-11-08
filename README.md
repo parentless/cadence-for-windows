@@ -46,7 +46,10 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Search tracks and playlists
 - Play music locally with queue, history, favorites, and radio
 - Browse native artist and album pages
-- Browse all playlists in a virtualized sidebar with truncated names; pin them from their page
+- Browse playlists in an expanded or compact icon sidebar, with tooltips, active-playlist selection, and recently opened playlists moving to the top
+- Add tracks to the front of the upcoming queue without interrupting playback
+- Clear artwork from Settings; the shared cache automatically removes older images at its memory budget
+- See a brief red update indicator beside your account when a new release is available
 - Open playlists in 15-entry pages; fetch more near the scroll end
 - Double-click tracks to play; right-click for the same actions across every track list
 - Choose Graphite, Blue, Green, Purple, or Rose selection fills in Settings

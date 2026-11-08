@@ -383,7 +383,7 @@ impl RenderOnce for TrackRow {
                 })
             });
         if let Some(transition) = self.hover_transition {
-            transition.apply(row, index, base, palette.selection, cx.reduce_motion())
+            transition.apply(row, window, base, palette.selection, cx.reduce_motion())
         } else {
             row.into_any_element()
         }

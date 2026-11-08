@@ -1605,3 +1605,140 @@ fn zoom_scales_layout_and_transport_and_survives_theme_changes() {
     fixture.update(|window, _| assert_eq!(window.rem_size(), px(16.)));
     fixture.no_commands();
 }
+
+#[test]
+fn collapsed_sidebar_keeps_playlist_buttons_inside_rail_and_promotes_opened_playlist() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: vec![track(0)],
+                    playlists: (0..200)
+                        .map(|i| model::Playlist {
+                            source_id: format!("playlist-{i}"),
+                            ..paged_playlist()
+                        })
+                        .collect(),
+                },
+                0,
+                cx,
+            );
+        });
+    });
+    fixture.update(|window, cx| window.click(("sidebar-playlist", 2usize), cx));
+    let BackendCommand::LoadPlaylist { playlist, .. } =
+        fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected playlist request")
+    };
+    assert_eq!(playlist.source_id, "playlist-2");
+    fixture.update(|window, cx| {
+        assert!(
+            window.find(("sidebar-playlist", 2usize)).bounds().top()
+                < window.find(("sidebar-playlist", 0usize)).bounds().top()
+        );
+        workspace
+            .upgrade()
+            .unwrap()
+            .read(cx)
+            .sidebar
+            .clone()
+            .update(cx, |sidebar, cx| sidebar.set_collapsed(true, cx));
+    });
+    fixture.update(|window, cx| {
+        assert_eq!(
+            window.find(("sidebar-playlist", 2usize)).selected(),
+            Some(true)
+        );
+        assert_eq!(window.find("nav-playlist").selected(), Some(false));
+        let rail_right = COLLAPSED_SIDEBAR_WIDTH.to_pixels(window.rem_size());
+        for id in ["nav-library", "nav-favorites", "nav-playlist", "nav-recent"] {
+            assert!(window.find(id).bounds().right() <= rail_right);
+        }
+        let cover = window.find(("sidebar-playlist", 2usize)).bounds();
+        assert!(cover.right() <= rail_right);
+        assert!(window.try_find(("sidebar-playlist", 199usize)).is_none());
+        window.click(("sidebar-playlist", 1usize), cx);
+    });
+    let BackendCommand::LoadPlaylist { playlist, .. } =
+        fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected collapsed playlist navigation")
+    };
+    assert_eq!(playlist.source_id, "playlist-1");
+}
+
+#[test]
+fn clearing_artwork_cache_releases_entries_without_changing_account_or_queue() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        let cache = services::AppServices::image_cache(cx);
+        cache.update(cx, |cache, _| {
+            let image = image::RgbaImage::new(32, 32);
+            let image = Arc::new(gpui_kit::RenderImage::new([image::Frame::new(image)]));
+            cache.seed_artist_fixture("https://fixtures.invalid/cache.png", image);
+        });
+        assert!(cache.read(cx).usage().0 > 0);
+        let player = services::AppServices::player(cx);
+        let before = player.read(cx).is_current_track(&track(0));
+        cache.update(cx, |cache, cx| cache.clear(window, cx));
+        assert_eq!(cache.read(cx).usage().0, 0);
+        assert_eq!(player.read(cx).is_current_track(&track(0)), before);
+    });
+    fixture.no_commands();
+}
+
+#[test]
+fn update_badge_opens_settings_without_opening_account_menu() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace
+            .upgrade()
+            .unwrap()
+            .read(cx)
+            .toolbar
+            .clone()
+            .update(cx, |toolbar, cx| toolbar.seed_update_available(cx))
+    });
+    fixture.update(|window, cx| window.click("update-available", cx));
+    assert_eq!(fixture.route(), Route::Settings);
+    fixture.update(|window, _| assert!(window.try_find("account-menu").is_none()));
+    fixture.no_commands();
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_brand_and_search_share_the_same_vertical_center() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, _| {
+        assert_eq!(
+            window.find("sidebar-toggle").bounds().center().y,
+            window.find("search-field").bounds().center().y
+        )
+    });
+}
+
+#[test]
+fn settings_cache_cleanup_button_is_reachable_and_does_not_send_playback_commands() {
+    let mut fixture = Fixture::new(true);
+    fixture.update(|window, cx| {
+        let position = window.find("settings-page").bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+                modifiers: Default::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    fixture.update(|window, cx| window.click("settings-clear-cache", cx));
+    assert_eq!(fixture.route(), Route::Settings);
+    fixture.no_commands();
+}
