@@ -12,7 +12,7 @@ use crate::{
     lifecycle::{Instance, InstanceLifecycle},
     model,
     spotify::{self, ClientIdSource, valid_client_id},
-    storage::{AppPreferences, MascotPreference, Store, ThemePreference},
+    storage::{AppPreferences, MascotPreference, SelectionColor, Store, ThemePreference},
 };
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{

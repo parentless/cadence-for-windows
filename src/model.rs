@@ -158,3 +158,12 @@ mod tests {
         assert!(track.album_ref.is_none());
     }
 }
+
+/// `next_offset` counts Spotify entries, including unavailable/local items we omit.
+/// Advancing by displayed rows would repeat entries on mixed playlists.
+#[derive(Clone, Debug)]
+pub struct PlaylistTrackPage {
+    pub tracks: Vec<Track>,
+    pub next_offset: Option<u32>,
+    pub total: u32,
+}

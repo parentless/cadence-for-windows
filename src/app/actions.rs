@@ -168,6 +168,8 @@ impl Workspace {
 
     /// Hides the queue panel, which the player bar's toggle also reflects.
     pub(super) fn close_queue(&mut self, cx: &mut Context<Self>) {
+        self.queue_drawer
+            .update(cx, |drawer, cx| drawer.close_menus(cx));
         self.player_bar
             .update(cx, |bar, cx| bar.set_queue_open(false, cx));
         cx.notify();
@@ -176,6 +178,8 @@ impl Workspace {
     /// Row action menus are anchored to a page that a route change takes off
     /// screen, so they have to come down with it or they reappear on return.
     pub(super) fn close_track_menus(&mut self, cx: &mut Context<Self>) {
+        self.queue_drawer
+            .update(cx, |drawer, cx| drawer.close_menus(cx));
         self.liked_songs.update(cx, |page, cx| page.close_menus(cx));
         self.favorites.update(cx, |page, cx| page.close_menus(cx));
         self.recent.update(cx, |page, cx| page.close_menus(cx));

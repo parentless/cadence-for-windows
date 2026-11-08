@@ -100,8 +100,12 @@ impl EventEmitter<PageEvent> for LibraryTracksPage {}
 impl LibraryTracksPage {
     pub(super) fn new(section: LibrarySection, cx: &mut Context<Self>) -> Self {
         let tracks = cx.new(|cx| {
-            track_list::TrackList::new(cx)
-                .with_context_menu_only(matches!(section, LibrarySection::LikedSongs))
+            let list = track_list::TrackList::new(cx);
+            if matches!(section, LibrarySection::LikedSongs) {
+                list.without_header()
+            } else {
+                list
+            }
         });
         Self {
             section,
@@ -182,12 +186,11 @@ impl Render for PlaylistsPage {
             )
         };
         let content = if playlists.is_empty() {
-            let message = if loaded {
-                "No Spotify playlists"
+            if loaded {
+                components::empty_state(palette, "No Spotify playlists").into_any_element()
             } else {
-                "Loading playlists…"
-            };
-            components::empty_state(palette, message).into_any_element()
+                components::list_skeleton(palette).into_any_element()
+            }
         } else {
             self.playlists
                 .update(cx, |list, cx| list.show("spotify-playlists", playlists, cx));

@@ -260,6 +260,15 @@ impl AppServices {
         cx.global::<Self>().preferences
     }
 
+    pub(super) fn set_selection_color(&mut self, color: SelectionColor) {
+        self.preferences.selection_color = color;
+        if let Some(store) = self.store.as_mut()
+            && let Err(error) = store.set_selection_color(color)
+        {
+            log::error!("could not save selection color: {error}");
+        }
+    }
+
     pub(super) fn set_theme_preference(
         preference: ThemePreference,
         cx: &mut App,

@@ -174,7 +174,7 @@ impl Toolbar {
             ConnectionState::AuthorizationRequired
         );
 
-        components::menu_surface(palette)
+        components::solid_menu_surface(palette)
             .on_mouse_up_out(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.close_menu(cx)),

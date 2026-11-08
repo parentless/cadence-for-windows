@@ -36,6 +36,16 @@ impl Appearance {
         cx.global::<Self>().preference
     }
 
+    pub(super) fn set_selection_color(color: SelectionColor, window: &mut Window, cx: &mut App) {
+        let services = cx.global_mut::<services::AppServices>();
+        services.set_selection_color(color);
+        apply_dark_mode(
+            resolve_dark_mode(Self::preference(cx), window.appearance()),
+            cx,
+        );
+        cx.refresh_windows();
+    }
+
     pub(super) fn set_preference(preference: ThemePreference, window: &mut Window, cx: &mut App) {
         cx.global_mut::<Self>().preference = preference;
         let dark_mode = resolve_dark_mode(preference, window.appearance());
@@ -65,7 +75,10 @@ fn palette_for(dark_mode: bool) -> CadencePalette {
 /// Makes `dark_mode`'s palette the one every view reads and projects it onto
 /// the component library's theme.
 fn apply_dark_mode(dark_mode: bool, cx: &mut App) {
-    let palette = palette_for(dark_mode);
+    let mut palette = palette_for(dark_mode);
+    palette.selection = services::AppServices::preferences(cx)
+        .selection_color
+        .fill(dark_mode);
     cx.global_mut::<Appearance>().palette = palette;
     let mode = if dark_mode {
         ThemeMode::Dark

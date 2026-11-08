@@ -182,9 +182,12 @@ impl BlockingStore {
         tracks: Vec<Track>,
         index: usize,
         position_ms: u32,
+        cursor: Option<(Playlist, u32)>,
     ) -> Result<()> {
-        self.call(move |store| store.set_playback_state(&tracks, index, position_ms))
-            .await
+        self.call(move |store| {
+            store.set_playlist_playback_state(&tracks, index, position_ms, &cursor)
+        })
+        .await
     }
 
     async fn update_playback_position(&self, position_ms: u32) -> Result<()> {
@@ -283,7 +286,17 @@ pub enum BackendCommand {
     },
     LoadPlaylist {
         playlist: Playlist,
-        respond: Reply<Vec<Track>>,
+        offset: u32,
+        respond: Reply<crate::model::PlaylistTrackPage>,
+    },
+    PlayQueueItem {
+        offset: usize,
+    },
+    PlayPlaylistContext {
+        playlist: Playlist,
+        tracks: Vec<Track>,
+        index: usize,
+        next_offset: Option<u32>,
     },
     LoadArtist {
         source_id: String,
@@ -751,6 +764,7 @@ struct Startup {
     spotify: Spotify,
     configuration: Option<SpotifyConfiguration>,
     playback_snapshot: Option<PlaybackSnapshot>,
+    playlist_cursor: Option<(Playlist, u32)>,
     playback_credentials_invalidated: bool,
 }
 
@@ -769,6 +783,13 @@ async fn start(
         }
     };
     log::info!("startup: store opened");
+    let playlist_cursor = store
+        .call(|store| store.playback_playlist_cursor())
+        .await
+        .unwrap_or_else(|error| {
+            log::warn!("could not restore playlist continuation: {error}");
+            None
+        });
     send_local_state(&store, events).await;
     let playback_snapshot = match store.playback_state().await {
         Ok(snapshot) => snapshot,
@@ -956,6 +977,7 @@ async fn start(
         spotify,
         configuration,
         playback_snapshot,
+        playlist_cursor,
         playback_credentials_invalidated,
     })
 }
@@ -1012,6 +1034,10 @@ async fn run(
                 worker.finish_favorite_refresh(refreshed).await;
                 continue;
             }
+            page = finished(&mut worker.playlist_prefetch) => {
+                worker.finish_playlist_page(page).await;
+                continue;
+            }
             extended = finished(&mut worker.autoplay.task) => {
                 worker.finish_autoplay(extended).await;
                 continue;
@@ -1055,7 +1081,15 @@ struct Worker {
     favorites: FavoriteRefresh,
     radio: Radio,
     autoplay: Autoplay,
+    playlist_cursor: Option<(Playlist, u32)>,
+    playlist_prefetch: Option<tokio::task::JoinHandle<Result<crate::model::PlaylistTrackPage>>>,
     session: SessionTasks,
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        abort_task(&mut self.playlist_prefetch);
+    }
 }
 
 impl Worker {
@@ -1074,6 +1108,8 @@ impl Worker {
             favorites: FavoriteRefresh::default(),
             radio: Radio::default(),
             autoplay: Autoplay::default(),
+            playlist_cursor: startup.playlist_cursor,
+            playlist_prefetch: None,
             session: SessionTasks::default(),
         }
     }
@@ -1191,9 +1227,13 @@ impl Worker {
                 self.catalog.search(self.spotify.clone(), query, respond);
                 Ok(())
             }
-            BackendCommand::LoadPlaylist { playlist, respond } => {
+            BackendCommand::LoadPlaylist {
+                playlist,
+                offset,
+                respond,
+            } => {
                 self.catalog
-                    .playlist(self.spotify.clone(), playlist, respond);
+                    .playlist(self.spotify.clone(), playlist, offset, respond);
                 Ok(())
             }
             BackendCommand::LoadArtist { source_id, respond } => {
@@ -1217,7 +1257,28 @@ impl Worker {
                     .await;
                 Ok(())
             }
-            BackendCommand::PlayContext { tracks, index } => self.play_context(tracks, index).await,
+            BackendCommand::PlayContext { tracks, index } => {
+                self.cancel_playlist_continuation();
+                self.play_context(tracks, index).await
+            }
+            BackendCommand::PlayQueueItem { offset } => {
+                let index = self.queue.index.and_then(|index| index.checked_add(offset));
+                if let Some(index) = index.filter(|index| *index < self.queue.tracks.len()) {
+                    self.load_queue_track(index).await
+                } else {
+                    Ok(())
+                }
+            }
+            BackendCommand::PlayPlaylistContext {
+                playlist,
+                tracks,
+                index,
+                next_offset,
+            } => {
+                self.cancel_playlist_continuation();
+                self.playlist_cursor = next_offset.map(|offset| (playlist, offset));
+                self.play_context(tracks, index).await
+            }
             BackendCommand::PlayNext(track) => self.play_next(track).await,
             BackendCommand::AppendToQueue(track) => self.append_to_queue(track).await,
             BackendCommand::RestorePlayback {
@@ -1489,7 +1550,12 @@ impl Worker {
         tracks.drain(..prune);
         let index = index - prune;
         self.store
-            .set_playback_state(tracks.clone(), index, self.queue.position_ms)
+            .set_playback_state(
+                tracks.clone(),
+                index,
+                self.queue.position_ms,
+                self.playlist_cursor.clone(),
+            )
             .await?;
         self.queue.tracks = tracks;
         self.queue.index = Some(index);
@@ -1667,7 +1733,12 @@ impl Worker {
         self.queue.prune(prune);
         if let Err(error) = self
             .store
-            .set_playback_state(self.queue.tracks.clone(), index - prune, 0)
+            .set_playback_state(
+                self.queue.tracks.clone(),
+                index - prune,
+                0,
+                self.playlist_cursor.clone(),
+            )
             .await
         {
             send_error(&self.events, error).await;
@@ -1796,6 +1867,7 @@ impl Worker {
             Some(Ok((request_id, Ok(tracks)))) => {
                 match load_context_track(&self.connection.player, &tracks, 0, &self.events).await {
                     Ok(()) => {
+                        self.cancel_playlist_continuation();
                         self.queue.tracks = tracks;
                         self.commit_loaded_queue(0).await;
                         let _ = self
@@ -1892,6 +1964,7 @@ impl Worker {
     /// Stops every task tied to the signed-in account: catalog loads, the
     /// favorite refresh, and radio.
     async fn abort_account_work(&mut self) {
+        self.cancel_playlist_continuation();
         self.catalog.abort_all();
         self.favorites.abort();
         self.radio.cancel(&self.events).await;
@@ -1914,7 +1987,84 @@ impl Worker {
     /// so autoplay can extend the queue before it runs out. The preference
     /// is read inside the task and re-checked when the result lands, so a
     /// toggle takes effect without replumbing.
+    fn cancel_playlist_continuation(&mut self) {
+        abort_task(&mut self.playlist_prefetch);
+        self.playlist_cursor = None;
+        abort_task(&mut self.autoplay.task);
+    }
+
+    /// Keep only a small lookahead in memory. This belongs to the process so
+    /// closing/navigating away from the playlist never cuts playback short.
+    fn prefetch_playlist(&mut self) {
+        if self.playlist_prefetch.is_some() {
+            return;
+        }
+        let Some((playlist, offset)) = self.playlist_cursor.as_ref() else {
+            return;
+        };
+        let spotify = self.spotify.clone();
+        let source_id = playlist.source_id.clone();
+        let offset = *offset;
+        self.playlist_prefetch = Some(tokio::spawn(async move {
+            run_with_timeout(
+                CATALOG_TIMEOUT_SECONDS,
+                "Spotify playlist playback page",
+                spotify.playlist_tracks_page(&source_id, offset),
+            )
+            .await
+        }));
+    }
+
+    async fn finish_playlist_page(
+        &mut self,
+        result: Finished<Result<crate::model::PlaylistTrackPage>>,
+    ) {
+        self.playlist_prefetch = None;
+        let page = match result {
+            Some(Ok(Ok(page))) => page,
+            Some(Ok(Err(error))) => {
+                send_error(&self.events, error).await;
+                return;
+            }
+            _ => return,
+        };
+        let old_cursor = self.playlist_cursor.clone();
+        let Some((playlist, _)) = self.playlist_cursor.take() else {
+            return;
+        };
+        self.playlist_cursor = page.next_offset.map(|offset| (playlist, offset));
+        let Some(index) = self.queue.index else {
+            return;
+        };
+        let old_len = self.queue.tracks.len();
+        let ended = self.queue.ended;
+        let mut tracks = self.queue.tracks.clone();
+        tracks.extend(page.tracks);
+        if let Err(error) = self.replace_queue(tracks, index).await {
+            self.playlist_cursor = old_cursor;
+            send_error(&self.events, error).await;
+            return;
+        }
+        if ended && self.queue.tracks.len() > old_len {
+            if let Err(error) = self.load_queue_track(index + 1).await {
+                send_error(&self.events, error).await;
+            }
+        } else {
+            self.maybe_prefetch_autoplay();
+        }
+    }
+
     fn maybe_prefetch_autoplay(&mut self) {
+        if self.playlist_cursor.is_some() {
+            if self
+                .queue
+                .index
+                .is_some_and(|index| self.queue.tracks.len().saturating_sub(index + 1) <= 5)
+            {
+                self.prefetch_playlist();
+            }
+            return;
+        }
         let Some(index) = self.queue.index else {
             return;
         };
@@ -2295,12 +2445,22 @@ impl CatalogFetches {
         });
     }
 
-    fn playlist(&mut self, spotify: Spotify, playlist: Playlist, respond: Reply<Vec<Track>>) {
+    fn playlist(
+        &mut self,
+        spotify: Spotify,
+        playlist: Playlist,
+        offset: u32,
+        respond: Reply<crate::model::PlaylistTrackPage>,
+    ) {
         Self::start(
             &mut self.playlist,
             respond,
             "Spotify playlist request",
-            async move { spotify.playlist_tracks(&playlist.source_id).await },
+            async move {
+                spotify
+                    .playlist_tracks_page(&playlist.source_id, offset)
+                    .await
+            },
         );
     }
 
@@ -3161,6 +3321,72 @@ mod tests {
             control_receiver.try_recv(),
             Ok(BackendCommand::Logout { generation: 1 })
         ));
+    }
+
+    #[tokio::test]
+    async fn playlist_continuation_preserves_order_duplicates_cursor_and_cancels_pending_work() {
+        let (_, shutdown) = tokio::sync::watch::channel(false);
+        let (events, _receiver) = super::event_channel(shutdown);
+        let store = BlockingStore::from_store(Store::in_memory().unwrap());
+        let playlist = crate::model::Playlist {
+            provider: Provider::Spotify,
+            source_id: "playlist".into(),
+            name: "Playlist".into(),
+            owner: "Owner".into(),
+            track_count: 100,
+            artwork_url: None,
+        };
+        let mut worker = super::Worker::new(
+            super::Startup {
+                store: store.clone(),
+                spotify: crate::spotify::Spotify::from_client_id(
+                    "00000000000000000000000000000000",
+                    false,
+                )
+                .await
+                .unwrap(),
+                configuration: None,
+                playback_snapshot: None,
+                playback_credentials_invalidated: false,
+                playlist_cursor: Some((playlist.clone(), 15)),
+            },
+            events,
+        );
+        worker.queue.tracks = vec![favorite(); 15];
+        worker.queue.index = Some(0);
+        worker
+            .finish_playlist_page(Some(Ok(Err(anyhow::anyhow!("offline")))))
+            .await;
+        assert_eq!(worker.playlist_cursor, Some((playlist.clone(), 15)));
+        assert_eq!(worker.queue.tracks.len(), 15);
+        assert!(worker.playlist_prefetch.is_none());
+        worker
+            .finish_playlist_page(Some(Ok(Ok(crate::model::PlaylistTrackPage {
+                tracks: vec![favorite(); 15],
+                next_offset: Some(30),
+                total: 100,
+            }))))
+            .await;
+        assert_eq!(worker.queue.tracks.len(), 30); // repeated songs are legitimate playlist entries
+        assert_eq!(worker.playlist_cursor, Some((playlist.clone(), 30)));
+        assert_eq!(
+            store
+                .call(|store| store.playback_playlist_cursor())
+                .await
+                .unwrap(),
+            Some((playlist, 30))
+        );
+        assert_eq!(
+            store.playback_state().await.unwrap().unwrap().tracks.len(),
+            30
+        );
+        let task = tokio::spawn(std::future::pending());
+        let handle = task.abort_handle();
+        worker.playlist_prefetch = Some(task);
+        worker.cancel_playlist_continuation();
+        tokio::task::yield_now().await;
+        assert!(handle.is_finished());
+        assert!(worker.playlist_cursor.is_none());
     }
 
     #[tokio::test]

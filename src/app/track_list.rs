@@ -9,6 +9,8 @@ use page::PageEvent;
 /// dismisses it. Dismissal that no click drives -- a keyboard route change, a
 /// scroll outside the table -- is the workspace's to trigger, via
 /// `close_menu`, because the menu outlives the page going off screen.
+pub(super) struct LoadMoreTracks;
+
 pub(super) struct TrackList {
     /// Set by `show`, which always runs before the list is first painted.
     id: Option<ElementId>,
@@ -16,8 +18,14 @@ pub(super) struct TrackList {
     /// The row whose action menu is open, keyed by source ID and row index so
     /// the same track appearing twice opens only the row that was clicked.
     menu_open: Option<String>,
-    context_menu_only: bool,
     inline_rows: bool,
+    queue_mode: bool,
+    hide_header: bool,
+    playlist_context: Option<(model::Playlist, Option<u32>)>,
+    can_load_more: bool,
+    load_more_emitted: bool,
+    scroll: gpui_kit::UniformListScrollHandle,
+    hover: components::HoverHighlight,
     palette: Option<CadencePalette>,
     menu_position: Option<gpui_kit::Point<Pixels>>,
     /// Album already on screen, whose "Go to album" entry would go nowhere.
@@ -28,6 +36,7 @@ pub(super) struct TrackList {
 }
 
 impl EventEmitter<PageEvent> for TrackList {}
+impl EventEmitter<LoadMoreTracks> for TrackList {}
 
 impl TrackList {
     pub(super) fn new(cx: &mut App) -> Self {
@@ -35,8 +44,14 @@ impl TrackList {
             id: None,
             tracks: Arc::default(),
             menu_open: None,
-            context_menu_only: false,
             inline_rows: false,
+            queue_mode: false,
+            hide_header: false,
+            playlist_context: None,
+            can_load_more: false,
+            load_more_emitted: false,
+            scroll: gpui_kit::UniformListScrollHandle::new(),
+            hover: components::HoverHighlight::default(),
             palette: None,
             menu_position: None,
             current_album_id: None,
@@ -44,6 +59,12 @@ impl TrackList {
             player: services::AppServices::player(cx),
             image_cache: services::AppServices::image_cache(cx),
         }
+    }
+
+    pub(super) fn for_queue(mut self) -> Self {
+        self.queue_mode = true;
+        self.hide_header = true;
+        self
     }
 
     pub(super) fn with_palette(mut self, palette: CadencePalette) -> Self {
@@ -58,8 +79,8 @@ impl TrackList {
         self
     }
 
-    pub(super) fn with_context_menu_only(mut self, enabled: bool) -> Self {
-        self.context_menu_only = enabled;
+    pub(super) fn without_header(mut self) -> Self {
+        self.hide_header = true;
         self
     }
 
@@ -79,8 +100,12 @@ impl TrackList {
         if self.id == id && Arc::ptr_eq(&self.tracks, &tracks) {
             return;
         }
+        if self.id != id {
+            self.scroll = gpui_kit::UniformListScrollHandle::new();
+        }
         self.id = id;
         self.tracks = tracks;
+        self.load_more_emitted = false;
         self.menu_open = None;
         cx.notify();
     }
@@ -107,9 +132,12 @@ impl TrackList {
         let Some(track) = self.tracks.get(index).cloned() else {
             return div().into_any_element();
         };
-        let palette = self
+        let mut palette = self
             .palette
             .unwrap_or_else(|| appearance::Appearance::palette(cx));
+        palette.selection = services::AppServices::preferences(cx)
+            .selection_color
+            .fill(self.palette.is_some() || palette.canvas == CadencePalette::DARK.canvas);
         let is_current_track = self.player.read(cx).is_current_track(&track);
         let favorite = self.library.read(cx).is_favorite(&track);
         let menu_key = format!("{}:{index}", track.source_id);
@@ -122,38 +150,59 @@ impl TrackList {
             .compact(compact)
             .current(is_current_track)
             .favorite(favorite)
-            .menu(menu_open, menu)
+            .hover_transition(
+                self.hover.transition(index, cx.background_executor().now()),
+                cx.listener(move |this, hovered: &bool, _, cx| {
+                    this.hover
+                        .set(index, *hovered, cx.background_executor().now());
+                    cx.notify();
+                }),
+            )
+            .menu(menu)
             .on_play(cx.listener(move |this, _, _, cx| this.play_from(index, cx)))
             .on_favorite(cx.listener(move |this, _, _, cx| {
                 this.library.update(cx, |library, cx| {
                     library.set_favorite(favorite_track.clone(), !favorite, cx)
                 });
             }))
-            .when(self.context_menu_only, |row| {
-                let menu_key = menu_key.clone();
-                row.context_menu(
-                    self.menu_position,
-                    cx.listener(move |this, event: &gpui_kit::MouseDownEvent, _, cx| {
-                        this.menu_open = Some(menu_key.clone());
-                        this.menu_position = Some(event.position);
-                        cx.notify();
-                    }),
-                )
-            })
-            .when(!self.context_menu_only, |row| {
-                row.on_toggle_menu(cx.listener(move |this, _, _, cx| {
-                    this.menu_open = (!menu_open).then(|| menu_key.clone());
-                    this.menu_position = None;
+            .context_menu(
+                self.menu_position,
+                cx.listener(move |this, event: &gpui_kit::MouseDownEvent, _, cx| {
+                    this.menu_open = Some(menu_key.clone());
+                    this.menu_position = Some(event.position);
                     cx.notify();
-                }))
-            })
+                }),
+            )
             .into_any_element()
     }
 
+    pub(super) fn set_playlist_context(
+        &mut self,
+        playlist: model::Playlist,
+        next_offset: Option<u32>,
+        loading: bool,
+    ) {
+        self.playlist_context = Some((playlist, next_offset));
+        self.can_load_more = next_offset.is_some() && !loading;
+        if loading {
+            self.load_more_emitted = false;
+        }
+    }
+
     fn play_from(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.queue_mode {
+            self.player
+                .update(cx, |player, cx| player.play_queue_item(index, cx));
+            return;
+        }
         let tracks = self.tracks.to_vec();
-        self.player
-            .update(cx, |player, cx| player.play_context(tracks, index, cx));
+        self.player.update(cx, |player, cx| {
+            if let Some((playlist, next)) = self.playlist_context.clone() {
+                player.play_playlist(playlist, tracks, index, next, cx)
+            } else {
+                player.play_context(tracks, index, cx)
+            }
+        });
     }
 
     fn action_menu(
@@ -164,9 +213,12 @@ impl TrackList {
         is_current_track: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        let palette = self
+        let mut palette = self
             .palette
             .unwrap_or_else(|| appearance::Appearance::palette(cx));
+        palette.selection = services::AppServices::preferences(cx)
+            .selection_color
+            .fill(self.palette.is_some() || palette.canvas == CadencePalette::DARK.canvas);
         let has_playback_context = self.player.read(cx).now_playing().is_some();
         let next_track = track.clone();
         let queue_track = track.clone();
@@ -311,10 +363,13 @@ impl TrackList {
 
 impl Render for TrackList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = self
+        let mut palette = self
             .palette
             .unwrap_or_else(|| appearance::Appearance::palette(cx));
-        let compact = is_compact_content_layout(window);
+        palette.selection = services::AppServices::preferences(cx)
+            .selection_color
+            .fill(self.palette.is_some() || palette.canvas == CadencePalette::DARK.canvas);
+        let compact = self.queue_mode || is_compact_content_layout(window);
         if self.inline_rows {
             let rows = (0..self.tracks.len())
                 .map(|index| self.row(index, compact, cx))
@@ -334,23 +389,51 @@ impl Render for TrackList {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(track_row::track_list_header(
-                palette,
-                compact,
-                !self.context_menu_only,
-            ))
+            .relative()
+            .when(!self.hide_header, |list| {
+                list.child(track_row::track_list_header(palette, compact))
+            })
             .child(
                 uniform_list(
                     self.id
                         .clone()
                         .expect("show sets the id before first paint"),
-                    self.tracks.len(),
+                    self.tracks.len()
+                        + usize::from(
+                            self.playlist_context
+                                .as_ref()
+                                .is_some_and(|(_, next)| next.is_some()),
+                        ),
                     cx.processor(move |this, range: Range<usize>, _, cx| {
-                        range.map(|index| this.row(index, compact, cx)).collect()
+                        if this.can_load_more
+                            && !this.load_more_emitted
+                            && range.end >= this.tracks.len().saturating_sub(3)
+                        {
+                            this.load_more_emitted = true;
+                            cx.emit(LoadMoreTracks);
+                        }
+                        range
+                            .map(|index| {
+                                if index < this.tracks.len() {
+                                    this.row(index, compact, cx)
+                                } else {
+                                    div()
+                                        .h_16()
+                                        .w_full()
+                                        .child(components::list_skeleton(palette))
+                                        .into_any_element()
+                                }
+                            })
+                            .collect()
                     }),
                 )
+                .track_scroll(&self.scroll)
                 .flex_1()
                 .min_h_0(),
+            )
+            .child(
+                gpui_kit::base::Scrollbar::vertical(&self.scroll)
+                    .mode(gpui_kit::base::ScrollbarMode::Always),
             )
     }
 }

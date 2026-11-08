@@ -74,6 +74,7 @@ pub(super) struct Sidebar {
     /// Where a pinned playlist should return to when the listener backs out.
     pinned_origin: Route,
     compact_layout: bool,
+    hover: components::HoverHighlight,
     collapsed: bool,
     transition_generation: u64,
     visual_width: Rc<Cell<Rems>>,
@@ -109,6 +110,7 @@ impl Sidebar {
             route: Route::LikedSongs,
             pinned_origin: Route::LikedSongs,
             compact_layout: false,
+            hover: components::HoverHighlight::default(),
             collapsed,
             transition_generation: 0,
             visual_width: Rc::new(Cell::new(width)),
@@ -177,6 +179,10 @@ impl Sidebar {
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let index = NAV_ITEMS
+            .iter()
+            .position(|nav| nav.id == item.id)
+            .unwrap_or(0);
         let route = self.route;
         let target = item.route;
         let selected = route == target || (target == Route::Playlists && route == Route::Playlist);
@@ -203,7 +209,6 @@ impl Sidebar {
             .when(focus_visible, |fill| {
                 fill.shadow(components::inset_focus_ring(palette))
             })
-            .hover(|style| style.bg(rgb(palette.surface_raised)))
             .child(
                 div()
                     .w_5()
@@ -233,6 +238,25 @@ impl Sidebar {
                     fill.w(width).ml(left).pl(pad)
                 },
             );
+        // Apply the hover fill outside the collapse geometry so neither animation
+        // restarts the other, and the keyboard focus ring stays inside the fill.
+        let fill = div().flex().items_center().rounded_xl().child(fill);
+        let fill = if let Some(hover) = self.hover.transition(index, cx.background_executor().now())
+        {
+            hover.apply(
+                fill.id(("nav-hover", index)),
+                index,
+                if selected {
+                    palette.selection
+                } else {
+                    palette.canvas
+                },
+                palette.control_hover,
+                cx.reduce_motion(),
+            )
+        } else {
+            fill.into_any_element()
+        };
         components::bare_button(item.id)
             .test_support()
             .track_focus(focus_handle)
@@ -247,6 +271,11 @@ impl Sidebar {
             .text_sm()
             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
             .child(fill)
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.hover
+                    .set(index, *hovered, cx.background_executor().now());
+                cx.notify();
+            }))
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::Navigate(target))))
             .into_any_element()
     }
@@ -285,36 +314,85 @@ impl Sidebar {
                 self.nav_item(item, focus_handle, &transition, palette, window, cx)
             })
             .collect();
-        let mut pinned_section = div()
+        let library = self.library.read(cx);
+        let playlists = if library.playlists().is_empty() {
+            library.pinned_playlists().clone()
+        } else {
+            library.playlists().clone()
+        };
+        let show_pinned = !playlists.is_empty();
+        let pinned_section = div()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .gap_2()
-            .px_2p5()
-            .child(components::section_label(palette, "Pinned Playlists"));
-        let pinned_playlists = self.library.read(cx).pinned_playlists().clone();
-        let show_pinned = if self.library.read(cx).local_loaded() {
-            for (index, playlist) in pinned_playlists.iter().cloned().enumerate() {
-                let selected_playlist = playlist.clone();
-                pinned_section = pinned_section.child(
-                    components::flush_button(palette, ("pinned-playlist", index))
-                        .h_8()
-                        .rounded_lg()
-                        .justify_start()
-                        .text_sm()
-                        .text_color(rgb(palette.text))
-                        .child(playlist.name)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(SidebarEvent::OpenPlaylist {
-                                playlist: selected_playlist.clone(),
-                                origin: pinned_origin,
-                            });
-                        })),
-                );
-            }
-            !pinned_playlists.is_empty()
-        } else {
-            false
-        };
+            .child(components::section_label(palette, "Playlists"))
+            .child(
+                uniform_list(
+                    "sidebar-playlists",
+                    playlists.len(),
+                    cx.processor(move |_, range: Range<usize>, _, cx| {
+                        range
+                            .filter_map(|index| {
+                                playlists.get(index).cloned().map(|playlist| {
+                                    let selected_playlist = playlist.clone();
+                                    let pinned = services::AppServices::library(cx)
+                                        .read(cx)
+                                        .is_playlist_pinned(&playlist);
+                                    components::flush_button(
+                                        palette,
+                                        (
+                                            if pinned {
+                                                "pinned-playlist"
+                                            } else {
+                                                "sidebar-playlist"
+                                            },
+                                            index,
+                                        ),
+                                    )
+                                    .test_support()
+                                    .h_9()
+                                    .w_full()
+                                    .min_w_0()
+                                    .px_3()
+                                    .rounded_lg()
+                                    .justify_start()
+                                    .gap_2()
+                                    .text_sm()
+                                    .text_color(rgb(palette.text))
+                                    .child(components::icon(
+                                        if pinned {
+                                            CadenceIcon::PinFilled
+                                        } else {
+                                            CadenceIcon::Playlist
+                                        },
+                                        tokens::MENU_ICON,
+                                        palette.text_muted,
+                                    ))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_ellipsis()
+                                            .line_clamp(1)
+                                            .child(playlist.name),
+                                    )
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(SidebarEvent::OpenPlaylist {
+                                            playlist: selected_playlist.clone(),
+                                            origin: pinned_origin,
+                                        })
+                                    }))
+                                    .into_any_element()
+                                })
+                            })
+                            .collect()
+                    }),
+                )
+                .flex_1()
+                .min_h_0(),
+            );
         let toggle_focus_visible = components::is_focus_visible(&self.toggle_focus, window);
         let brand_fill = div()
             .h_12()
@@ -433,15 +511,26 @@ impl Sidebar {
                             .children(nav_rows),
                     )
                     .when(show_pinned && !collapsed, |sidebar| {
-                        sidebar.child(div().child(pinned_section).with_animation(
-                            ("sidebar-pinned", animation_id),
-                            row_animation.clone(),
-                            move |pinned, delta| {
-                                pinned.opacity(start_progress + (1. - start_progress) * delta)
-                            },
-                        ))
+                        sidebar.child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .child(pinned_section)
+                                .with_animation(
+                                    ("sidebar-pinned", animation_id),
+                                    row_animation.clone(),
+                                    move |pinned, delta| {
+                                        pinned
+                                            .opacity(start_progress + (1. - start_progress) * delta)
+                                    },
+                                ),
+                        )
                     })
-                    .child(div().flex_1()),
+                    .when(!show_pinned || collapsed, |panel| {
+                        panel.child(div().flex_1())
+                    }),
             )
             .with_animation(
                 ("sidebar-width", animation_id),

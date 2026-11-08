@@ -9,7 +9,6 @@ const COLUMN_GUTTER: Rems = Rems(1.);
 const INDEX_COLUMN_WIDTH: Rems = Rems(2.75);
 const STAR_COLUMN_WIDTH: Rems = Rems(2.25);
 const TIME_COLUMN_WIDTH: Rems = Rems(3.75);
-const ACTIONS_COLUMN_WIDTH: Rems = Rems(2.25);
 /// How far the actions menu drops below its trigger, and the room it keeps
 /// from the window edges.
 const ACTIONS_MENU_OFFSET: Rems = Rems(0.25);
@@ -17,8 +16,10 @@ const ACTIONS_MENU_WINDOW_MARGIN: Rems = Rems(0.5);
 
 /// The column header for a track list. Lives beside `TrackRow` so the fixed
 /// columns cannot drift out of step with the rows they label.
-pub(super) fn track_list_header(palette: CadencePalette, compact: bool, show_actions: bool) -> Div {
+pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> impl IntoElement {
     div()
+        .id("track-list-header")
+        .test_support()
         .h_10()
         .flex_none()
         .border_b_1()
@@ -58,9 +59,6 @@ pub(super) fn track_list_header(palette: CadencePalette, compact: bool, show_act
                 .pr_2()
                 .child("Time"),
         )
-        .when(show_actions, |header| {
-            header.child(div().w(ACTIONS_COLUMN_WIDTH).flex_none())
-        })
 }
 
 /// A single line that ellipsizes at the column edge. Wrapping text with a
@@ -73,6 +71,7 @@ fn ellipsized_line() -> Div {
 }
 
 type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type HoverCallback = Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
 type ContextCallback = Box<dyn Fn(&gpui_kit::MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 /// One track in a list.
@@ -89,14 +88,13 @@ pub(super) struct TrackRow {
     compact: bool,
     current: bool,
     favorite: bool,
-    menu_open: bool,
-    /// Rendered beside the actions button while the menu is open.
+    /// Anchored to the pointer while the context menu is open.
     menu: Option<AnyElement>,
     on_play: Option<RowCallback>,
     on_favorite: Option<RowCallback>,
-    on_toggle_menu: Option<RowCallback>,
     on_context_menu: Option<ContextCallback>,
-    context_menu_only: bool,
+    hover_transition: Option<components::HoverTransition>,
+    on_hover: Option<HoverCallback>,
     menu_position: Option<gpui_kit::Point<Pixels>>,
 }
 
@@ -115,15 +113,24 @@ impl TrackRow {
             compact: false,
             current: false,
             favorite: false,
-            menu_open: false,
             menu: None,
             on_play: None,
             on_favorite: None,
-            on_toggle_menu: None,
             on_context_menu: None,
-            context_menu_only: false,
+            hover_transition: None,
+            on_hover: None,
             menu_position: None,
         }
+    }
+
+    pub(super) fn hover_transition(
+        mut self,
+        transition: Option<components::HoverTransition>,
+        callback: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.hover_transition = transition;
+        self.on_hover = Some(Box::new(callback));
+        self
     }
 
     pub(super) fn compact(mut self, compact: bool) -> Self {
@@ -143,8 +150,7 @@ impl TrackRow {
         self
     }
 
-    pub(super) fn menu(mut self, open: bool, menu: Option<AnyElement>) -> Self {
-        self.menu_open = open;
+    pub(super) fn menu(mut self, menu: Option<AnyElement>) -> Self {
         self.menu = menu;
         self
     }
@@ -170,33 +176,25 @@ impl TrackRow {
         position: Option<gpui_kit::Point<Pixels>>,
         handler: impl Fn(&gpui_kit::MouseDownEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.context_menu_only = true;
         self.menu_position = position;
         self.on_context_menu = Some(Box::new(handler));
-        self
-    }
-
-    pub(super) fn on_toggle_menu(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_toggle_menu = Some(Box::new(handler));
         self
     }
 }
 
 impl RenderOnce for TrackRow {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = self.palette;
         let index = self.index;
-        let context_menu_only = self.context_menu_only;
         let menu_position = self.menu_position;
         let rem_size = window.rem_size();
-        let row_group: SharedString =
-            format!("spotify-track-row:{}:{index}", self.track.source_id).into();
-        components::button(palette, ("spotify-track", index))
+        let base = if self.current {
+            palette.selection
+        } else {
+            palette.surface
+        };
+        let row = components::button(palette, ("spotify-track", index))
             .test_support()
-            .group(row_group.clone())
             .w_full()
             .h_16()
             .px_3()
@@ -209,7 +207,7 @@ impl RenderOnce for TrackRow {
             } else {
                 palette.surface
             }))
-            .hover(|style| style.bg(rgb(palette.surface_hover)))
+            .when_some(self.on_hover, |row, handler| row.on_hover(handler))
             .child(
                 div()
                     .w(INDEX_COLUMN_WIDTH)
@@ -309,42 +307,9 @@ impl RenderOnce for TrackRow {
             .child(
                 div()
                     .relative()
-                    .when(!context_menu_only, |anchor| {
-                        anchor.size(ACTIONS_COLUMN_WIDTH)
-                    })
                     .flex_none()
-                    .when(!context_menu_only, |anchor| {
-                        anchor.child(
-                            components::button(palette, ("track-actions", index))
-                                .test_support()
-                                .size(ACTIONS_COLUMN_WIDTH)
-                                .rounded_full()
-                                .hover(|style| style.bg(rgb(palette.control)))
-                                .active(|style| style.bg(rgb(palette.control_hover)))
-                                .when(self.menu_open, |button| button.bg(rgb(palette.control)))
-                                .when(!self.menu_open, |button| {
-                                    button
-                                        .invisible()
-                                        .group_hover(row_group, |style| style.visible())
-                                })
-                                .child(components::icon(
-                                    CadenceIcon::More,
-                                    tokens::CONTROL_ICON,
-                                    palette.text_primary,
-                                ))
-                                .when_some(self.on_toggle_menu, |button, handler| {
-                                    button.on_click(move |event, window, cx| {
-                                        cx.stop_propagation();
-                                        handler(event, window, cx);
-                                    })
-                                }),
-                        )
-                    })
                     .when_some(self.menu, |anchor, menu| {
-                        let menu_offset = point(
-                            ACTIONS_COLUMN_WIDTH.to_pixels(rem_size),
-                            ACTIONS_MENU_OFFSET.to_pixels(rem_size),
-                        );
+                        let menu_offset = point(px(0.), ACTIONS_MENU_OFFSET.to_pixels(rem_size));
                         let menu_window_margin = ACTIONS_MENU_WINDOW_MARGIN.to_pixels(rem_size);
                         anchor.child(deferred(
                             anchored()
@@ -367,8 +332,17 @@ impl RenderOnce for TrackRow {
                 })
             })
             .when_some(self.on_play.filter(|_| !self.current), |row, handler| {
-                row.on_click(handler)
-            })
+                row.on_click(move |event, window, cx| {
+                    if event.is_keyboard() || event.click_count() == 2 {
+                        handler(event, window, cx);
+                    }
+                })
+            });
+        if let Some(transition) = self.hover_transition {
+            transition.apply(row, index, base, palette.selection, cx.reduce_motion())
+        } else {
+            row.into_any_element()
+        }
     }
 }
 

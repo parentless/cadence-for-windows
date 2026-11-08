@@ -533,3 +533,155 @@ pub(super) fn page_heading(
 pub(super) fn page(id: impl Into<ElementId>) -> Stateful<Div> {
     div().id(id).size_full().min_h_0().flex().flex_col().p_8()
 }
+
+/// The account menu stays opaque; glass belongs to search and track menus.
+pub(super) fn solid_menu_surface(palette: CadencePalette) -> Div {
+    div()
+        .occlude()
+        .w(tokens::MENU_WIDTH)
+        .p_1p5()
+        .flex()
+        .flex_col()
+        .rounded_xl()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface_raised))
+        .shadow_md()
+        .text_color(rgb(palette.text))
+        .text_size(tokens::BODY_TEXT)
+}
+
+/// Static placeholders have no shimmer timer and disappear when data arrives.
+pub(super) fn list_skeleton(palette: CadencePalette) -> Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .overflow_hidden()
+        .children((0..8).map(|index| {
+            div()
+                .h_16()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_3()
+                .px_3()
+                .border_b_1()
+                .border_color(rgb(palette.border))
+                .child(div().size_10().rounded_md().bg(rgb(palette.control)))
+                .child(
+                    div()
+                        .flex_1()
+                        .child(
+                            div()
+                                .h_3()
+                                .w(relative(if index % 2 == 0 { 0.45 } else { 0.65 }))
+                                .rounded_md()
+                                .bg(rgb(palette.control)),
+                        )
+                        .child(
+                            div()
+                                .mt_2()
+                                .h_2()
+                                .w(relative(0.28))
+                                .rounded_md()
+                                .bg(rgb(palette.control)),
+                        ),
+                )
+        }))
+}
+
+const HOVER_FADE: Duration = Duration::from_millis(140);
+
+/// A list retains two row indices, never an entry per track. Only pointer changes
+/// start a short repaint; no timer runs while the pointer is still or absent.
+#[derive(Default)]
+pub(super) struct HoverHighlight {
+    hovered: Option<usize>,
+    previous: Option<(usize, f32)>,
+    started: Option<std::time::Instant>,
+    generation: usize,
+}
+
+impl HoverHighlight {
+    fn progress(&self, now: std::time::Instant) -> f32 {
+        self.started.map_or(1., |start| {
+            (now.saturating_duration_since(start).as_secs_f32() / HOVER_FADE.as_secs_f32())
+                .clamp(0., 1.)
+        })
+    }
+
+    pub(super) fn set(&mut self, index: usize, hovered: bool, now: std::time::Instant) {
+        if hovered && self.hovered == Some(index) || !hovered && self.hovered != Some(index) {
+            return;
+        }
+        let progress = self.progress(now);
+        self.previous = self.hovered.map(|old| (old, progress)).or_else(|| {
+            self.previous
+                .map(|(old, alpha)| (old, alpha * (1. - progress)))
+        });
+        self.hovered = hovered.then_some(index);
+        self.started = Some(now);
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    pub(super) fn transition(
+        &self,
+        index: usize,
+        now: std::time::Instant,
+    ) -> Option<HoverTransition> {
+        let target = if self.hovered == Some(index) { 1. } else { 0. };
+        let from = self
+            .previous
+            .filter(|(old, _)| *old == index)
+            .map_or(0., |(_, alpha)| alpha);
+        if target == 0. && from == 0. {
+            return None;
+        }
+        let progress = self.progress(now);
+        Some(HoverTransition {
+            generation: self.generation,
+            from: from + (target - from) * progress,
+            target,
+            remaining: HOVER_FADE.mul_f32(1. - progress),
+        })
+    }
+}
+
+pub(super) struct HoverTransition {
+    generation: usize,
+    from: f32,
+    target: f32,
+    remaining: Duration,
+}
+
+impl HoverTransition {
+    pub(super) fn apply<T: Styled + IntoElement + 'static>(
+        self,
+        row: T,
+        id: usize,
+        base: u32,
+        highlight: u32,
+        reduce_motion: bool,
+    ) -> AnyElement {
+        let color = move |alpha: f32| {
+            let channel = |shift| {
+                let a = ((base >> shift) & 255u32) as f32;
+                let b = ((highlight >> shift) & 255u32) as f32;
+                (a + (b - a) * alpha).round() as u32
+            };
+            rgb((channel(16) << 16) | (channel(8) << 8) | channel(0))
+        };
+        if reduce_motion || self.remaining.is_zero() {
+            return row.bg(color(self.target)).into_any_element();
+        }
+        row.with_animation(
+            (
+                "row-hover",
+                id.wrapping_mul(31).wrapping_add(self.generation),
+            ),
+            Animation::new(self.remaining),
+            move |row, progress| row.bg(color(self.from + (self.target - self.from) * progress)),
+        )
+        .into_any_element()
+    }
+}

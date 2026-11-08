@@ -1,6 +1,7 @@
 use super::*;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::ElementExt as _;
+use page::PageEvent;
 
 const TRACK_HEIGHT: Rems = Rems(0.3125);
 const TRACK_HEIGHT_ACTIVE: Rems = Rems(0.4375);
@@ -543,27 +544,37 @@ impl EventEmitter<CloseQueue> for QueueDrawer {}
 /// The slide-over queue panel.
 pub(super) struct QueueDrawer {
     player: Entity<player::Player>,
-    image_cache: Entity<image_cache::BoundedImageCache>,
+    tracks: Entity<track_list::TrackList>,
+    _tracks_subscription: Subscription,
 }
 
+impl EventEmitter<PageEvent> for QueueDrawer {}
+
 impl QueueDrawer {
-    pub(super) fn new(cx: &mut App) -> Self {
+    pub(super) fn new(cx: &mut Context<Self>) -> Self {
+        let tracks = cx.new(|cx| track_list::TrackList::new(cx).for_queue());
         Self {
             player: services::AppServices::player(cx),
-            image_cache: services::AppServices::image_cache(cx),
+            _tracks_subscription: page::forward(&tracks, cx),
+            tracks,
         }
+    }
+
+    pub(super) fn close_menus(&mut self, cx: &mut Context<Self>) {
+        self.tracks.update(cx, |list, cx| list.close_menu(cx));
     }
 
     fn drawer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = appearance::Appearance::palette(cx);
         let player = self.player.read(cx);
-        let queue = player.queue().clone();
-        let queue_count = queue.len();
-        let context_offset = usize::from(player.now_playing().is_some());
         let playback_context = player.context().clone();
-        let now_playing = player.now_playing().cloned();
+        self.tracks.update(cx, |list, cx| {
+            list.show("queue-track-list", playback_context, cx)
+        });
 
         div()
+            .id("queue-drawer")
+            .test_support()
             .occlude()
             .absolute()
             .top_0()
@@ -597,134 +608,7 @@ impl QueueDrawer {
                     ),
             )
             .child(components::section_label(palette, "Now playing"))
-            .child(
-                now_playing
-                    .map(|track| {
-                        self.row(palette, "queue-current", track, true)
-                            .into_any_element()
-                    })
-                    .unwrap_or_else(|| {
-                        components::empty_state(palette, "Nothing playing").into_any_element()
-                    }),
-            )
-            .child(div().h_6())
-            .child(components::section_label(palette, "Next"))
-            .child(
-                div()
-                    .id("queue-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        uniform_list(
-                            "queue-tracks",
-                            queue_count,
-                            cx.processor(move |this, range: Range<usize>, _, cx| {
-                                range
-                                    .map(|index| {
-                                        let track = queue[index].clone();
-                                        let playback_context = playback_context.clone();
-                                        let row =
-                                            this.row(palette, ("queue-track", index), track, false);
-                                        components::control(palette, row)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.player.update(cx, |player, cx| {
-                                                    player.play_context(
-                                                        playback_context.to_vec(),
-                                                        index + context_offset,
-                                                        cx,
-                                                    )
-                                                });
-                                            }))
-                                            .into_any_element()
-                                    })
-                                    .collect()
-                            }),
-                        )
-                        .flex_1()
-                        .min_h_0(),
-                    ),
-            )
-    }
-
-    fn row(
-        &self,
-        palette: CadencePalette,
-        id: impl Into<ElementId>,
-        track: model::Track,
-        current: bool,
-    ) -> Stateful<Div> {
-        div()
-            .id(id)
-            .w_full()
-            .h(if current {
-                tokens::QUEUE_CURRENT_ROW_HEIGHT
-            } else {
-                tokens::QUEUE_ROW_HEIGHT
-            })
-            .flex_none()
-            .px_2p5()
-            .rounded_none()
-            .border_b_1()
-            .border_color(rgb(palette.border))
-            .bg(if current {
-                rgb(palette.selection)
-            } else {
-                rgb(palette.surface)
-            })
-            .when(!current, |row| {
-                row.hover(|style| style.bg(rgb(palette.surface_hover)))
-            })
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(components::artwork(
-                palette,
-                &self.image_cache,
-                track.artwork_url.as_deref(),
-                if current {
-                    tokens::QUEUE_CURRENT_ARTWORK
-                } else {
-                    tokens::TRACK_ARTWORK
-                },
-                CadenceIcon::MusicNote,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_size(tokens::BODY_TEXT)
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                            .text_color(rgb(palette.text_primary))
-                            .child(track.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_xs()
-                            .text_color(rgb(if current {
-                                palette.text
-                            } else {
-                                palette.text_muted
-                            }))
-                            .child(track.artist.clone()),
-                    ),
-            )
-            .child(
-                div()
-                    .w_11()
-                    .flex_none()
-                    .text_right()
-                    .text_xs()
-                    .text_color(rgb(palette.text_muted))
-                    .child(format_duration(track.duration_ms)),
-            )
+            .child(self.tracks.clone())
     }
 }
 

@@ -31,7 +31,6 @@ pub(super) enum CadenceIcon {
     PinFilled,
     SpeakerMuted,
     Speaker,
-    More,
     SystemAppearance,
     Sun,
     Moon,
@@ -41,7 +40,7 @@ pub(super) enum CadenceIcon {
 
 impl CadenceIcon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 31] = [
+    pub(super) const ALL: [Self; 30] = [
         Self::Heart,
         Self::HeartFilled,
         Self::Star,
@@ -67,7 +66,6 @@ impl CadenceIcon {
         Self::PinFilled,
         Self::SpeakerMuted,
         Self::Speaker,
-        Self::More,
         Self::SystemAppearance,
         Self::Sun,
         Self::Moon,
@@ -102,7 +100,6 @@ impl CadenceIcon {
             Self::PinFilled => "pin-filled",
             Self::SpeakerMuted => "speaker-muted",
             Self::Speaker => "speaker",
-            Self::More => "more",
             Self::SystemAppearance => "system-appearance",
             Self::Sun => "sun",
             Self::Moon => "moon",

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy)]
 enum Scene {
     Artist,
+    PlaylistsLoading,
+    PlaylistTracks,
     ArtistMenu,
     ArtistPortrait,
     ArtistLandscape,
@@ -29,6 +31,9 @@ enum Scene {
 fn scenes() -> Vec<(&'static str, Scene)> {
     vec![
         ("artist", Scene::Artist),
+        ("artist-account-menu", Scene::ArtistMenu),
+        ("playlists-loading", Scene::PlaylistsLoading),
+        ("playlist-tracks", Scene::PlaylistTracks),
         ("settings", Scene::Settings),
         ("settings-autoplay-off", Scene::SettingsAutoplayOff),
         ("settings-mascot-open", Scene::SettingsMenu),
@@ -193,6 +198,25 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                                 .expect("artist fixture reply");
                         }
                         command => panic!("unexpected artist command: {command:?}"),
+                    }
+                }
+                Scene::PlaylistsLoading => {
+                    workspace.library.update(cx, |library, cx| library.clear(cx));
+                    workspace.navigate(Route::Playlists, cx);
+                }
+                Scene::PlaylistTracks => {
+                    let playlists: Vec<_> = (0..200).map(|index| model::Playlist {
+                        provider: model::Provider::Spotify, source_id: format!("fixture-playlist-{index}"),
+                        name: if index == 0 { "A playlist with an especially long title that must stay within the sidebar".into() } else { format!("Playlist {}", index + 1).into() },
+                        owner: "Cadence Ensemble".into(), track_count: 1000, artwork_url: None,
+                    }).collect();
+                    let selected = playlists[0].clone();
+                    workspace.library.update(cx, |library, cx| { library.handle_backend_event(BackendEvent::LibraryLoaded { generation: 0, liked_tracks: vec![track(0)], playlists }, 0, cx); });
+                    workspace.load_playlist(selected, cx);
+                    workspace.navigate(Route::Playlist, cx);
+                    match backend.commands.try_recv().expect("playlist request") {
+                        BackendCommand::LoadPlaylist { respond, .. } => { respond.send(Ok(model::PlaylistTrackPage { tracks: (0..15).map(track).collect(), next_offset: Some(15), total: 1000 })).unwrap(); }
+                        _ => panic!("expected playlist request"),
                     }
                 }
                 Scene::Settings | Scene::SettingsAutoplayOff | Scene::SettingsMenu => {

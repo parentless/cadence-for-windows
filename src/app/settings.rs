@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::TestSupportExt as _;
 
 #[derive(Clone)]
 struct MascotOption {
@@ -170,7 +171,7 @@ impl Settings {
                             .child(Self::settings_section_header(
                                 palette,
                                 "Appearance",
-                                "Choose how Cadence looks on this Mac.",
+                                "Choose how Cadence looks.",
                             ))
                             .child(
                                 div()
@@ -202,6 +203,19 @@ impl Settings {
                                         cx,
                                     )),
                             ),
+                    )
+                    .child(
+                        div().mt_5().child(components::section_label(palette, "Selection color"))
+                            .child(div().mt_2().flex().flex_wrap().gap_2().children(
+                                SelectionColor::ALL.into_iter().enumerate().map(|(index, color)| {
+                                    components::button(palette, ("settings-selection-color", index))
+                                        .test_support().h_9().px_3().rounded_lg()
+                                        .bg(rgb(color.fill(palette.canvas == CadencePalette::DARK.canvas)))
+                                        .border_1().border_color(rgb(if preferences.selection_color == color { palette.text_primary } else { palette.border }))
+                                        .child(color.name())
+                                        .on_click(move |_, window, cx| appearance::Appearance::set_selection_color(color, window, cx))
+                                })
+                            ))
                     )
                     .child(
                         div()

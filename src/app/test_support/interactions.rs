@@ -1278,3 +1278,252 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
     assert_eq!(fixture.requested_album(), "album-4");
     assert_eq!(fixture.route(), Route::Album);
 }
+
+#[test]
+fn tracks_use_double_click_and_liked_songs_have_no_column_titles() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        assert!(window.try_find("track-list-header").is_none());
+        window.click(("spotify-track", 1usize), cx);
+    });
+    fixture.no_commands();
+    fixture.update(|window, cx| window.double_click(("spotify-track", 1usize), cx));
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::PlayContext { index: 1, .. }
+    ));
+    fixture.no_commands();
+}
+
+fn paged_playlist() -> model::Playlist {
+    model::Playlist { provider: model::Provider::Spotify, source_id: "large-playlist".into(), name: "A very long playlist name that should stay inside the sidebar without widening the window".into(), owner: "Owner".into(), track_count: 1000, artwork_url: None }
+}
+
+#[test]
+fn playlist_fetches_small_pages_only_near_the_scroll_end_and_preserves_playback_cursor() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.load_playlist(paged_playlist(), cx);
+            workspace.navigate(Route::Playlist, cx);
+        })
+    });
+    let BackendCommand::LoadPlaylist {
+        offset, respond, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected first page");
+    };
+    assert_eq!(offset, 0);
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            tracks: (0..15).map(track).collect(),
+            next_offset: Some(15),
+            total: 1000,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click(("spotify-track", 1usize), cx));
+    fixture.no_commands();
+    fixture.update(|window, cx| window.double_click(("spotify-track", 1usize), cx));
+    match fixture.backend.commands.try_recv().unwrap() {
+        BackendCommand::PlayPlaylistContext {
+            tracks,
+            index,
+            next_offset,
+            ..
+        } => {
+            assert_eq!(tracks.len(), 15);
+            assert_eq!(index, 1);
+            assert_eq!(next_offset, Some(15));
+        }
+        _ => panic!("expected paged playback context"),
+    }
+    fixture.update(|window, cx| {
+        let position = window.find(("spotify-track", 1usize)).bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-850.))),
+                modifiers: Default::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    let BackendCommand::LoadPlaylist {
+        offset, respond, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected next page");
+    };
+    assert_eq!(offset, 15);
+    fixture.no_commands(); // further frames/scrolls cannot duplicate an in-flight request
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            tracks: (15..30).map(track).collect(),
+            next_offset: None,
+            total: 30,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.no_commands();
+}
+
+#[test]
+fn playlist_skips_empty_filtered_pages_and_retries_without_discarding_loaded_tracks() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.load_playlist(paged_playlist(), cx);
+            workspace.navigate(Route::Playlist, cx);
+        })
+    });
+    let BackendCommand::LoadPlaylist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            tracks: vec![],
+            next_offset: Some(15),
+            total: 40,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    let BackendCommand::LoadPlaylist {
+        offset, respond, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(offset, 15);
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            tracks: (0..15).map(track).collect(),
+            next_offset: Some(30),
+            total: 40,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.no_commands();
+    fixture.update(|window, cx| {
+        let position = window.find(("spotify-track", 1usize)).bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-850.))),
+                modifiers: Default::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    let BackendCommand::LoadPlaylist {
+        offset, respond, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(offset, 30);
+    respond.send(Err(anyhow::anyhow!("offline"))).unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| {
+        assert!(window.try_find("playlist-retry-page").is_some());
+        window.click("playlist-retry-page", cx);
+    });
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::LoadPlaylist { offset: 30, .. }
+    ));
+}
+
+#[test]
+fn selection_color_setting_applies_immediately_and_persists() {
+    let mut fixture = Fixture::new(true);
+    fixture.update(|window, cx| {
+        window.click(("settings-selection-color", 3usize), cx);
+    });
+    fixture.update(|_, cx| {
+        assert_eq!(
+            services::AppServices::preferences(cx).selection_color,
+            crate::storage::SelectionColor::Purple
+        );
+        assert_eq!(
+            appearance::Appearance::palette(cx).selection,
+            crate::storage::SelectionColor::Purple.fill(true)
+        );
+    });
+    fixture.no_commands();
+}
+
+#[test]
+fn queue_uses_shared_rows_and_double_click_keeps_the_existing_playback_context() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| window.click("queue-toggle", cx));
+    fixture.update(|window, cx| {
+        assert!(
+            window
+                .within("queue-drawer")
+                .try_find(("track-actions", 1usize))
+                .is_none()
+        );
+        window
+            .within("queue-drawer")
+            .click(("spotify-track", 1usize), cx);
+    });
+    fixture.no_commands();
+    fixture.update(|window, cx| {
+        window
+            .within("queue-drawer")
+            .double_click(("spotify-track", 1usize), cx)
+    });
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::PlayQueueItem { offset: 1 }
+    ));
+    fixture.no_commands();
+}
+
+#[test]
+fn sidebar_shows_unpinned_playlists_truncates_names_and_virtualizes_long_libraries() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: vec![track(0)],
+                    playlists: (0..200)
+                        .map(|index| model::Playlist {
+                            source_id: format!("playlist-{index}"),
+                            ..paged_playlist()
+                        })
+                        .collect(),
+                },
+                0,
+                cx,
+            );
+        });
+    });
+    fixture.update(|window, cx| {
+        let row = window.find(("sidebar-playlist", 0usize)).bounds();
+        assert!(row.size.width < px(240.));
+        assert!(row.right() < px(240.));
+        assert!(window.try_find(("sidebar-playlist", 199usize)).is_none());
+        window.click(("sidebar-playlist", 0usize), cx);
+    });
+    let BackendCommand::LoadPlaylist {
+        playlist, offset, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected playlist navigation");
+    };
+    assert_eq!(playlist.source_id, "playlist-0");
+    assert_eq!(offset, 0);
+}

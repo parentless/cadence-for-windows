@@ -51,8 +51,6 @@ pub(super) const SIDEBAR_TOP_INSET: Rems = Rems(1.);
 pub(super) const PLAYLIST_ROW_HEIGHT: Rems = Rems(4.75);
 pub(super) const ALBUM_CARD_HEIGHT: Rems = Rems(15.25);
 pub(super) const QUEUE_DRAWER_WIDTH: Rems = Rems(26.25);
-pub(super) const QUEUE_ROW_HEIGHT: Rems = Rems(3.875);
-pub(super) const QUEUE_CURRENT_ROW_HEIGHT: Rems = Rems(4.5);
 
 pub(super) const ONBOARDING_MIN_HEIGHT: Rems = Rems(40.);
 pub(super) const ONBOARDING_RAIL_WIDTH: Rems = Rems(26.25);
@@ -76,10 +74,6 @@ pub(super) const TRACK_ARTWORK: ArtworkSize = ArtworkSize {
 pub(super) const PLAYLIST_ROW_ARTWORK: ArtworkSize = ArtworkSize {
     size: Rems(3.),
     radius: Rems(0.625),
-};
-pub(super) const QUEUE_CURRENT_ARTWORK: ArtworkSize = ArtworkSize {
-    size: Rems(3.),
-    radius: Rems(0.5),
 };
 pub(super) const PLAYER_ARTWORK: ArtworkSize = ArtworkSize {
     size: Rems(3.5),

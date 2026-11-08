@@ -498,27 +498,41 @@ impl Spotify {
         .await
     }
 
-    pub async fn playlist_tracks(&self, source_id: &str) -> Result<Vec<Track>> {
+    pub async fn playlist_tracks_page(
+        &self,
+        source_id: &str,
+        offset: u32,
+    ) -> Result<crate::model::PlaylistTrackPage> {
         let playlist_id = PlaylistId::from_id(source_id)?;
         self.gated(async {
-            self.client
-                .playlist_items(playlist_id, None, None)
-                .map_err(anyhow::Error::from)
-                .and_then(|item| async move {
-                    if item.is_local {
-                        return Ok(None);
+            let page = self
+                .client
+                .playlist_items_manual(playlist_id, None, None, Some(15), Some(offset))
+                .await?;
+            let next_offset = page
+                .next
+                .as_ref()
+                .map(|_| page.offset.saturating_add(page.items.len() as u32));
+            let total = page.total;
+            let mut tracks = Vec::with_capacity(page.items.len());
+            for item in page.items {
+                if item.is_local {
+                    continue;
+                }
+                if let Some(PlayableItem::Track(track)) = item.item
+                    && track.id.is_some()
+                {
+                    let track = convert_track(track)?;
+                    if track.is_displayable() {
+                        tracks.push(track);
                     }
-                    match item.item {
-                        Some(PlayableItem::Track(track)) if track.id.is_some() => {
-                            let track = convert_track(track)?;
-                            Ok(track.is_displayable().then_some(track))
-                        }
-                        _ => Ok(None),
-                    }
-                })
-                .try_filter_map(|track| async move { Ok(track) })
-                .try_collect()
-                .await
+                }
+            }
+            Ok(crate::model::PlaylistTrackPage {
+                tracks,
+                next_offset: next_offset.filter(|next| *next > offset),
+                total,
+            })
         })
         .await
     }

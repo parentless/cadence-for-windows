@@ -46,7 +46,10 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Search tracks and playlists
 - Play music locally with queue, history, favorites, and radio
 - Browse native artist and album pages
-- Pin playlists to the sidebar
+- Browse all playlists in a virtualized sidebar with truncated names and pin controls
+- Open playlists in 15-entry pages; fetch more near the scroll end
+- Double-click tracks to play; right-click for the same actions across every track list
+- Choose Graphite, Blue, Green, Purple, or Rose selection fills in Settings
 - Now Playing and media key controls
 - Optional Discord Rich Presence with current track, artist, artwork, and progress
 - Light, dark, and system appearances

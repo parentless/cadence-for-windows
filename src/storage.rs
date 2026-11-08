@@ -23,10 +23,57 @@ pub enum MascotPreference {
     TarantellaDancer,
 }
 
+/// Selection colors use muted fills so track text stays readable in both themes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SelectionColor {
+    #[default]
+    Graphite,
+    Blue,
+    Green,
+    Purple,
+    Rose,
+}
+
+impl SelectionColor {
+    pub const ALL: [Self; 5] = [
+        Self::Graphite,
+        Self::Blue,
+        Self::Green,
+        Self::Purple,
+        Self::Rose,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Graphite => "Graphite",
+            Self::Blue => "Blue",
+            Self::Green => "Green",
+            Self::Purple => "Purple",
+            Self::Rose => "Rose",
+        }
+    }
+
+    pub fn fill(self, dark: bool) -> u32 {
+        match (self, dark) {
+            (Self::Graphite, true) => 0x39393D,
+            (Self::Graphite, false) => 0xD8D8DD,
+            (Self::Blue, true) => 0x183B56,
+            (Self::Blue, false) => 0xD8ECFC,
+            (Self::Green, true) => 0x253F34,
+            (Self::Green, false) => 0xD5EBDD,
+            (Self::Purple, true) => 0x3D3050,
+            (Self::Purple, false) => 0xE8DDF3,
+            (Self::Rose, true) => 0x4D3039,
+            (Self::Rose, false) => 0xF2DDE3,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AppPreferences {
     pub sidebar_collapsed: bool,
     pub theme: ThemePreference,
+    pub selection_color: SelectionColor,
     pub autoplay: bool,
     pub mascot: MascotPreference,
 }
@@ -36,6 +83,7 @@ impl Default for AppPreferences {
         Self {
             sidebar_collapsed: false,
             theme: ThemePreference::default(),
+            selection_color: SelectionColor::default(),
             // Autoplay is on unless the listener turned it off.
             autoplay: true,
             mascot: MascotPreference::default(),
@@ -245,9 +293,14 @@ impl Store {
             Some("romeo_vespa") => MascotPreference::RomeoVespa,
             _ => MascotPreference::default(),
         };
+        let selection_color = self.preference("selection_color")?;
         Ok(AppPreferences {
             sidebar_collapsed,
             theme,
+            selection_color: SelectionColor::ALL
+                .into_iter()
+                .find(|color| selection_color.as_deref() == Some(color.name()))
+                .unwrap_or_default(),
             autoplay,
             mascot,
         })
@@ -303,6 +356,10 @@ impl Store {
             "sidebar_collapsed",
             if collapsed { "true" } else { "false" },
         )
+    }
+
+    pub fn set_selection_color(&mut self, color: SelectionColor) -> Result<()> {
+        self.set_preference("selection_color", color.name())
     }
 
     pub fn set_theme_preference(&mut self, theme: ThemePreference) -> Result<()> {
@@ -550,6 +607,29 @@ impl Store {
         .collect()
     }
 
+    pub(crate) fn playback_playlist_cursor(&self) -> Result<Option<(Playlist, u32)>> {
+        self.preference("playback_playlist_cursor")?
+            .map(|value| serde_json::from_str(&value).context("invalid playlist playback cursor"))
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    /// Save the queue and its unloaded continuation in one transaction. Restarting
+    /// the app must not silently turn a large playlist into its first fifteen songs.
+    pub(crate) fn set_playlist_playback_state(
+        &self,
+        tracks: &[Track],
+        index: usize,
+        position_ms: u32,
+        cursor: &Option<(Playlist, u32)>,
+    ) -> Result<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        self.set_playback_state(tracks, index, position_ms)?;
+        transaction.execute("INSERT INTO preferences (key, value) VALUES ('playback_playlist_cursor', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(cursor)?])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn set_playback_state(
         &self,
         tracks: &[Track],
@@ -617,6 +697,10 @@ impl Store {
     }
 
     pub fn clear_playback_state(&self) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM preferences WHERE key = 'playback_playlist_cursor'",
+            [],
+        )?;
         self.connection.execute("DELETE FROM playback_state", [])?;
         Ok(())
     }
@@ -770,6 +854,36 @@ mod tests {
     }
 
     #[test]
+    fn playlist_cursor_is_saved_with_queue_and_cleared_for_other_contexts() {
+        let mut store = Store::in_memory().unwrap();
+        let tracks = vec![track("one"), track("two")];
+        let playlist = crate::model::Playlist {
+            provider: crate::model::Provider::Spotify,
+            source_id: "playlist".into(),
+            name: "Playlist".into(),
+            owner: "Owner".into(),
+            track_count: 4000,
+            artwork_url: None,
+        };
+        let cursor = Some((playlist, 15));
+        store
+            .set_playlist_playback_state(&tracks, 0, 123, &cursor)
+            .unwrap();
+        assert_eq!(store.playback_playlist_cursor().unwrap(), cursor);
+        assert_eq!(store.playback_state().unwrap().unwrap().tracks, tracks);
+        store
+            .set_playlist_playback_state(&tracks, 1, 0, &None)
+            .unwrap();
+        assert_eq!(store.playback_playlist_cursor().unwrap(), None);
+        for color in super::SelectionColor::ALL {
+            store.set_selection_color(color).unwrap();
+            assert_eq!(store.preferences().unwrap().selection_color, color);
+        }
+        store.clear_playback_state().unwrap();
+        assert_eq!(store.playback_playlist_cursor().unwrap(), None);
+    }
+
+    #[test]
     fn preferences_round_trip() {
         let mut store = Store::in_memory().unwrap();
         assert_eq!(store.preferences().unwrap(), AppPreferences::default());
@@ -785,6 +899,7 @@ mod tests {
             AppPreferences {
                 sidebar_collapsed: true,
                 theme: ThemePreference::Dark,
+                selection_color: super::SelectionColor::default(),
                 autoplay: false,
                 mascot: MascotPreference::TarantellaDancer,
             }

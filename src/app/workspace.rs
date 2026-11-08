@@ -189,7 +189,8 @@ impl Workspace {
                 cx.notify();
             },
         ));
-        let queue_drawer = cx.new(|cx| player_bar::QueueDrawer::new(cx));
+        let queue_drawer = cx.new(player_bar::QueueDrawer::new);
+        subscriptions.push(cx.subscribe(&queue_drawer, Workspace::handle_page_event));
         subscriptions.push(cx.subscribe(
             &queue_drawer,
             |this, _, _: &player_bar::CloseQueue, cx| {

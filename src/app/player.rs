@@ -14,7 +14,6 @@ pub(super) struct Player {
     backend: BackendHandle,
     now_playing: Option<model::Track>,
     context: Arc<[model::Track]>,
-    queue: Arc<[model::Track]>,
     playing: bool,
     loading: bool,
     /// Position and play state to reapply once a reconnected player is ready.
@@ -35,7 +34,6 @@ impl Player {
             backend,
             now_playing: None,
             context: Arc::default(),
-            queue: Arc::default(),
             playing: false,
             loading: false,
             restore: None,
@@ -57,8 +55,9 @@ impl Player {
         &self.context
     }
 
-    pub(super) fn queue(&self) -> &Arc<[model::Track]> {
-        &self.queue
+    #[cfg(test)]
+    pub(super) fn queue(&self) -> &[model::Track] {
+        self.context.get(1..).unwrap_or_default()
     }
 
     pub(super) fn playing(&self) -> bool {
@@ -210,6 +209,39 @@ impl Player {
         started
     }
 
+    pub(super) fn play_queue_item(&mut self, offset: usize, cx: &mut Context<Self>) {
+        if self.send(BackendCommand::PlayQueueItem { offset }, cx) {
+            self.loading = true;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn play_playlist(
+        &mut self,
+        playlist: model::Playlist,
+        tracks: Vec<model::Track>,
+        index: usize,
+        next_offset: Option<u32>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let started = self.send(
+            BackendCommand::PlayPlaylistContext {
+                playlist,
+                tracks,
+                index,
+                next_offset,
+            },
+            cx,
+        );
+        if started {
+            self.clock.reset(0, cx.background_executor().now());
+            self.set_playback(false, cx);
+            self.loading = true;
+        }
+        cx.notify();
+        started
+    }
+
     pub(super) fn play_next(&mut self, track: model::Track, cx: &mut Context<Self>) -> bool {
         self.deliver(BackendCommand::PlayNext(track), cx)
     }
@@ -310,17 +342,15 @@ impl Player {
 
     fn adopt_context(&mut self, current: model::Track, next: Vec<model::Track>) {
         self.context = std::iter::once(current.clone())
-            .chain(next.iter().cloned())
+            .chain(next)
             .collect::<Vec<_>>()
             .into();
         self.now_playing = Some(current);
-        self.queue = next.into();
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.now_playing = None;
         self.context = Arc::default();
-        self.queue = Arc::default();
         self.set_playback(false, cx);
         self.loading = false;
         self.restore = None;
