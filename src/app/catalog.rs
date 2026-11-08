@@ -769,6 +769,7 @@ impl AlbumPage {
             list.set_current_album_id(Some(source_id.clone()), cx)
         });
         if !same_album {
+            self.track_list.update(cx, |list, cx| list.clear(cx));
             self.album = None;
             self.tracks = Arc::default();
             self.loaded = false;
@@ -1337,6 +1338,44 @@ fn page_header() -> Div {
 #[cfg(test)]
 mod retained_page_tests {
     use super::*;
+
+    #[test]
+    fn navigating_away_releases_oversized_album_metadata_even_before_the_next_reply() {
+        let mut cx = gpui_kit::HeadlessAppContext::with_asset_source(
+            Arc::new(gpui_kit::NoopTextSystem),
+            Arc::new(assets::CadenceAssets),
+        );
+        cx.update(|cx| {
+            let _probe = crate::app::test_support::initialize(cx, ThemePreference::Dark);
+            let page = cx.new(|cx| AlbumPage::new(services::AppServices::backend(cx), cx));
+            let tracks: Arc<[model::Track]> =
+                vec![crate::app::test_support::track(0); RETAINED_PAGE_TRACK_LIMIT + 1].into();
+            let weak = Arc::downgrade(&tracks);
+            page.update(cx, |page, cx| {
+                page.reference = Some(model::AlbumRef {
+                    source_id: Some("old".into()),
+                    ..Default::default()
+                });
+                page.loaded = true;
+                page.loaded_at = Some(SystemTime::now());
+                page.tracks = tracks;
+                page.track_list
+                    .update(cx, |list, cx| list.show("old", page.tracks.clone(), cx));
+                page.open(
+                    model::AlbumRef {
+                        source_id: Some("new".into()),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                assert!(page.previous.is_none());
+            });
+            assert!(
+                weak.upgrade().is_none(),
+                "hidden list must not retain an evicted album"
+            );
+        });
+    }
 
     #[test]
     fn inactive_pages_are_bounded_by_track_count_and_metadata_bytes() {
