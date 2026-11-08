@@ -46,7 +46,7 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Search tracks and playlists
 - Play music locally with queue, history, favorites, and radio
 - Browse native artist and album pages
-- Browse all playlists in a virtualized sidebar with truncated names and pin controls
+- Browse all playlists in a virtualized sidebar with truncated names; pin them from their page
 - Open playlists in 15-entry pages; fetch more near the scroll end
 - Double-click tracks to play; right-click for the same actions across every track list
 - Choose Graphite, Blue, Green, Purple, or Rose selection fills in Settings
