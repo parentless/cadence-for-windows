@@ -104,6 +104,12 @@ impl Workspace {
                 settings::SettingsEvent::SetTheme(preference) => {
                     this.set_theme_preference(*preference, window, cx)
                 }
+                settings::SettingsEvent::SetZoom(zoom) => {
+                    if let Err(error) = appearance::Appearance::set_ui_zoom(*zoom, cx) {
+                        this.last_error = Some(format!("Could not save UI zoom: {error}").into());
+                    }
+                    cx.notify();
+                }
                 settings::SettingsEvent::SetAutoplay(autoplay) => {
                     // The backend reads this preference from disk, so a
                     // failed save means the toggle would lie about what

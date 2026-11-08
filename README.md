@@ -50,6 +50,8 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Open playlists in 15-entry pages; fetch more near the scroll end
 - Double-click tracks to play; right-click for the same actions across every track list
 - Choose Graphite, Blue, Green, Purple, or Rose selection fills in Settings
+- Scale the UI from 75% to 125% with saved zoom presets
+- Use current-track play/pause controls directly in any track list
 - Now Playing and media key controls
 - Optional Discord Rich Presence with current track, artist, artwork, and progress
 - Light, dark, and system appearances

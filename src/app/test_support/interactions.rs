@@ -1527,3 +1527,81 @@ fn sidebar_shows_unpinned_playlists_truncates_names_and_virtualizes_long_librari
     assert_eq!(playlist.source_id, "playlist-0");
     assert_eq!(offset, 0);
 }
+
+#[test]
+fn current_track_index_toggles_playback_without_replacing_the_queue() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        assert_eq!(
+            window.find(("track-playback-toggle", 0usize)).label(),
+            Some("Play")
+        );
+        assert!(window.try_find(("track-playback-toggle", 1usize)).is_none());
+        window.click(("track-playback-toggle", 0usize), cx);
+    });
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::Resume
+    ));
+    fixture.update(|window, cx| {
+        assert_eq!(
+            window.find(("track-playback-toggle", 0usize)).label(),
+            Some("Pause")
+        );
+        window.click(("track-playback-toggle", 0usize), cx);
+    });
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::Pause
+    ));
+    fixture.update(|window, cx| window.double_click(("track-playback-toggle", 0usize), cx));
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::Resume
+    ));
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click("queue-toggle", cx));
+    fixture.update(|window, cx| {
+        window
+            .within("queue-drawer")
+            .click(("track-playback-toggle", 0usize), cx)
+    });
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::Pause
+    ));
+    fixture.no_commands();
+}
+
+#[test]
+fn zoom_scales_layout_and_transport_and_survives_theme_changes() {
+    let mut fixture = Fixture::new(true);
+    let original = fixture.update(|window, _| window.find("play-toggle").bounds().size);
+    fixture.update(|window, cx| window.click(("settings-ui-zoom", 125usize), cx));
+    fixture.update(|window, cx| {
+        assert_eq!(window.rem_size(), px(20.));
+        assert_eq!(
+            services::AppServices::preferences(cx).ui_zoom.percent(),
+            125
+        );
+        assert_eq!(
+            window.find("play-toggle").bounds().size.width,
+            original.width * 1.25
+        );
+        appearance::Appearance::set_preference(ThemePreference::Light, window, cx);
+    });
+    fixture.update(|window, cx| {
+        assert_eq!(window.rem_size(), px(20.));
+        window.click(("settings-ui-zoom", 75usize), cx);
+    });
+    fixture.update(|window, cx| {
+        assert_eq!(window.rem_size(), px(12.));
+        assert_eq!(
+            window.find("play-toggle").bounds().size.width,
+            original.width * 0.75
+        );
+        window.click(("settings-ui-zoom", 100usize), cx);
+    });
+    fixture.update(|window, _| assert_eq!(window.rem_size(), px(16.)));
+    fixture.no_commands();
+}

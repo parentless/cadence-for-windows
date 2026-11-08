@@ -36,6 +36,15 @@ impl Appearance {
         cx.global::<Self>().preference
     }
 
+    pub(super) fn set_ui_zoom(zoom: UiZoom, cx: &mut App) -> anyhow::Result<()> {
+        services::AppServices::set_ui_zoom(zoom, cx)?;
+        Theme::update(cx, |theme| {
+            theme.font_size = px(16. * f32::from(zoom.percent()) / 100.)
+        });
+        cx.refresh_windows();
+        Ok(())
+    }
+
     pub(super) fn set_selection_color(color: SelectionColor, window: &mut Window, cx: &mut App) {
         let services = cx.global_mut::<services::AppServices>();
         services.set_selection_color(color);
@@ -86,7 +95,9 @@ fn apply_dark_mode(dark_mode: bool, cx: &mut App) {
         ThemeMode::Light
     };
     Theme::change(mode, None, cx);
+    let zoom = services::AppServices::preferences(cx).ui_zoom;
     Theme::update(cx, |theme| {
+        theme.font_size = px(16. * f32::from(zoom.percent()) / 100.);
         apply_palette_to_theme_colors(palette, &mut theme.colors)
     });
 }

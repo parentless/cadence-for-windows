@@ -299,7 +299,7 @@ pub(super) struct ArtistPage {
     tracks: Arc<[model::Track]>,
     albums: Arc<[model::Album]>,
     content_state: gpui_kit::ListState,
-    content_layout: Option<(usize, usize, usize)>,
+    content_layout: Option<(usize, usize, usize, Pixels)>,
     loaded: bool,
     error: Option<SharedString>,
     loaded_at: Option<SystemTime>,
@@ -915,7 +915,7 @@ impl Render for ArtistPage {
         } else if !self.loaded {
             components::empty_state(palette, "Loading artist…").into_any_element()
         } else {
-            let layout = (tracks.len(), self.albums.len(), columns);
+            let layout = (tracks.len(), self.albums.len(), columns, window.rem_size());
             if self.content_layout != Some(layout) {
                 self.content_state
                     .reset(2 + self.albums.len().div_ceil(columns));
@@ -954,7 +954,7 @@ impl Render for ArtistPage {
             .test_support()
             .relative()
             .w_full()
-            .h(px(208.) + overlay_inset)
+            .h(Rems(13.).to_pixels(window.rem_size()) + overlay_inset)
             .flex_none()
             .overflow_hidden()
             .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))

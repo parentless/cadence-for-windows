@@ -91,3 +91,8 @@ pub(super) const COLLECTION_ARTWORK: ArtworkSize = ArtworkSize {
     size: Rems(11.),
     radius: Rems(1.75),
 };
+
+pub(super) const SIDEBAR_PLAYLIST_ARTWORK: ArtworkSize = ArtworkSize {
+    size: Rems(1.75),
+    radius: Rems(0.375),
+};

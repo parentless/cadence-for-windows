@@ -69,6 +69,8 @@ struct RowTransition {
 pub(super) struct Sidebar {
     library: Entity<library::Library>,
     brand_mark: Arc<gpui_kit::Image>,
+    image_cache: Entity<image_cache::BoundedImageCache>,
+    playlist_hover: components::HoverHighlight,
     /// The route to highlight, pushed by the workspace when it navigates.
     route: Route,
     /// Where a pinned playlist should return to when the listener backs out.
@@ -106,6 +108,8 @@ impl Sidebar {
         };
         Self {
             library: services::AppServices::library(cx),
+            image_cache: services::AppServices::image_cache(cx),
+            playlist_hover: components::HoverHighlight::default(),
             brand_mark: services::AppServices::brand_mark(cx),
             route: Route::LikedSongs,
             pinned_origin: Route::LikedSongs,
@@ -321,6 +325,7 @@ impl Sidebar {
             library.playlists().clone()
         };
         let show_pinned = !playlists.is_empty();
+        let reduce_motion = cx.reduce_motion();
         let pinned_section = div()
             .flex_1()
             .min_h_0()
@@ -332,7 +337,7 @@ impl Sidebar {
                 uniform_list(
                     "sidebar-playlists",
                     playlists.len(),
-                    cx.processor(move |_, range: Range<usize>, _, cx| {
+                    cx.processor(move |this, range: Range<usize>, _, cx| {
                         range
                             .filter_map(|index| {
                                 playlists.get(index).cloned().map(|playlist| {
@@ -340,7 +345,7 @@ impl Sidebar {
                                     let pinned = services::AppServices::library(cx)
                                         .read(cx)
                                         .is_playlist_pinned(&playlist);
-                                    components::flush_button(
+                                    let row = components::button(
                                         palette,
                                         (
                                             if pinned {
@@ -352,7 +357,7 @@ impl Sidebar {
                                         ),
                                     )
                                     .test_support()
-                                    .h_9()
+                                    .h_11()
                                     .w_full()
                                     .min_w_0()
                                     .px_3()
@@ -361,15 +366,20 @@ impl Sidebar {
                                     .gap_2()
                                     .text_sm()
                                     .text_color(rgb(palette.text))
-                                    .child(components::icon(
-                                        if pinned {
-                                            CadenceIcon::PinFilled
-                                        } else {
-                                            CadenceIcon::Playlist
-                                        },
-                                        tokens::MENU_ICON,
-                                        palette.text_muted,
+                                    .child(components::artwork(
+                                        palette,
+                                        &this.image_cache,
+                                        playlist.artwork_url.as_deref(),
+                                        tokens::SIDEBAR_PLAYLIST_ARTWORK,
+                                        CadenceIcon::Playlist,
                                     ))
+                                    .when(pinned, |row| {
+                                        row.child(components::icon(
+                                            CadenceIcon::PinFilled,
+                                            Rems(0.625),
+                                            palette.text_muted,
+                                        ))
+                                    })
                                     .child(
                                         div()
                                             .flex_1()
@@ -378,13 +388,34 @@ impl Sidebar {
                                             .line_clamp(1)
                                             .child(playlist.name),
                                     )
+                                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                        this.playlist_hover.set(
+                                            index,
+                                            *hovered,
+                                            cx.background_executor().now(),
+                                        );
+                                        cx.notify();
+                                    }))
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.emit(SidebarEvent::OpenPlaylist {
                                             playlist: selected_playlist.clone(),
                                             origin: pinned_origin,
                                         })
-                                    }))
-                                    .into_any_element()
+                                    }));
+                                    if let Some(hover) = this
+                                        .playlist_hover
+                                        .transition(index, cx.background_executor().now())
+                                    {
+                                        hover.apply(
+                                            row,
+                                            index,
+                                            palette.canvas,
+                                            palette.control_hover,
+                                            reduce_motion,
+                                        )
+                                    } else {
+                                        row.into_any_element()
+                                    }
                                 })
                             })
                             .collect()

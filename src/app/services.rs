@@ -260,6 +260,17 @@ impl AppServices {
         cx.global::<Self>().preferences
     }
 
+    pub(super) fn set_ui_zoom(zoom: UiZoom, cx: &mut App) -> anyhow::Result<()> {
+        let services = cx.global_mut::<Self>();
+        services
+            .store
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("settings storage is unavailable"))?
+            .set_ui_zoom(zoom)?;
+        services.preferences.ui_zoom = zoom;
+        Ok(())
+    }
+
     pub(super) fn set_selection_color(&mut self, color: SelectionColor) {
         self.preferences.selection_color = color;
         if let Some(store) = self.store.as_mut()

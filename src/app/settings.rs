@@ -44,6 +44,7 @@ fn mascot_options() -> Vec<MascotOption> {
 pub(super) enum SettingsEvent {
     RequestAppChange,
     SetTheme(ThemePreference),
+    SetZoom(UiZoom),
     SetAutoplay(bool),
     SetMascot(MascotPreference),
     SetDiscord(crate::discord::Config),
@@ -203,6 +204,16 @@ impl Settings {
                                         cx,
                                     )),
                             ),
+                    )
+                    .child(div().mt_5().child(components::section_label(palette, "UI zoom"))
+                        .child(div().mt_2().flex().flex_wrap().gap_2().children(UiZoom::ALL.into_iter().map(|zoom| {
+                            components::button(palette, ("settings-ui-zoom", usize::from(zoom.percent())))
+                                .test_support().h_9().px_3().rounded_lg()
+                                .bg(rgb(if preferences.ui_zoom == zoom { palette.selection } else { palette.control }))
+                                .hover(|style| style.bg(rgb(palette.control_hover)))
+                                .child(format!("{}%", zoom.percent()))
+                                .on_click(cx.listener(move |_, _, _, cx| cx.emit(SettingsEvent::SetZoom(zoom))))
+                        })))
                     )
                     .child(
                         div().mt_5().child(components::section_label(palette, "Selection color"))

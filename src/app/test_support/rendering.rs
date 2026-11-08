@@ -9,9 +9,13 @@ enum Scene {
     Artist,
     PlaylistsLoading,
     PlaylistTracks,
+    PlaylistHover,
+    PlaylistZoomSmall,
+    PlaylistZoomLarge,
     ArtistMenu,
     ArtistPortrait,
     ArtistLandscape,
+    ArtistZoomLarge,
     Settings,
     SettingsAutoplayOff,
     SettingsMenu,
@@ -31,9 +35,13 @@ enum Scene {
 fn scenes() -> Vec<(&'static str, Scene)> {
     vec![
         ("artist", Scene::Artist),
+        ("artist-zoom-large", Scene::ArtistZoomLarge),
         ("artist-account-menu", Scene::ArtistMenu),
         ("playlists-loading", Scene::PlaylistsLoading),
         ("playlist-tracks", Scene::PlaylistTracks),
+        ("sidebar-playlist-hover", Scene::PlaylistHover),
+        ("playlist-zoom-small", Scene::PlaylistZoomSmall),
+        ("playlist-zoom-large", Scene::PlaylistZoomLarge),
         ("settings", Scene::Settings),
         ("settings-autoplay-off", Scene::SettingsAutoplayOff),
         ("settings-mascot-open", Scene::SettingsMenu),
@@ -140,7 +148,8 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                 Scene::Artist
                 | Scene::ArtistMenu
                 | Scene::ArtistPortrait
-                | Scene::ArtistLandscape => {
+                | Scene::ArtistLandscape | Scene::ArtistZoomLarge => {
+                    if matches!(scene, Scene::ArtistZoomLarge) { appearance::Appearance::set_ui_zoom(crate::storage::UiZoom::from_percent(125).unwrap(), cx).unwrap(); }
                     let (image_width, image_height) = match scene {
                         Scene::ArtistPortrait => (360, 1080),
                         Scene::ArtistLandscape => (1080, 360),
@@ -204,11 +213,18 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     workspace.library.update(cx, |library, cx| library.clear(cx));
                     workspace.navigate(Route::Playlists, cx);
                 }
-                Scene::PlaylistTracks => {
+                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge => {
+                    let artwork_url = "https://fixtures.invalid/sidebar-cover.png";
+                    let cover = image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([45 + (x*2) as u8, 50 + (y*2) as u8, 160, 255]));
+                    services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(artwork_url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(cover)]))));
+                    if matches!(scene, Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge) {
+                        let percent = if matches!(scene, Scene::PlaylistZoomSmall) { 75 } else { 125 };
+                        appearance::Appearance::set_ui_zoom(crate::storage::UiZoom::from_percent(percent).unwrap(), cx).unwrap();
+                    }
                     let playlists: Vec<_> = (0..200).map(|index| model::Playlist {
                         provider: model::Provider::Spotify, source_id: format!("fixture-playlist-{index}"),
                         name: if index == 0 { "A playlist with an especially long title that must stay within the sidebar".into() } else { format!("Playlist {}", index + 1).into() },
-                        owner: "Cadence Ensemble".into(), track_count: 1000, artwork_url: None,
+                        owner: "Cadence Ensemble".into(), track_count: 1000, artwork_url: (index % 2 == 0).then(|| artwork_url.into()),
                     }).collect();
                     let selected = playlists[0].clone();
                     workspace.library.update(cx, |library, cx| { library.handle_backend_event(BackendEvent::LibraryLoaded { generation: 0, liked_tracks: vec![track(0)], playlists }, 0, cx); });
@@ -243,6 +259,13 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         .expect("activate fixture window");
     settle(&mut cx, handle.into());
     match scene {
+        Scene::PlaylistHover => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.hover(("sidebar-playlist", 0usize), cx)
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
         Scene::ArtistMenu => {
             cx.update_window(handle.into(), |_, window, cx| {
                 let position = window.find("account").bounds().center();
@@ -360,18 +383,24 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     }
     if matches!(
         scene,
-        Scene::Artist | Scene::ArtistMenu | Scene::ArtistPortrait | Scene::ArtistLandscape
+        Scene::Artist
+            | Scene::ArtistMenu
+            | Scene::ArtistPortrait
+            | Scene::ArtistLandscape
+            | Scene::ArtistZoomLarge
     ) {
         cx.update_window(handle.into(), |_, window, _| {
             let bounds = window.find("artist-portrait").bounds();
-            assert_eq!(bounds.size.width, px(160.));
-            assert_eq!(bounds.size.height, px(160.));
+            assert_eq!(bounds.size.width, Rems(10.).to_pixels(window.rem_size()));
+            assert_eq!(bounds.size.height, Rems(10.).to_pixels(window.rem_size()));
             let popular = window.find("artist-popular-heading").bounds();
             let discography = window.find("artist-discography-heading").bounds();
             let last_track = window.find(("spotify-track", 2usize)).bounds();
             assert!(popular.origin.y < last_track.origin.y);
             assert!(discography.origin.y >= last_track.bottom());
-            assert!(discography.origin.y - last_track.bottom() <= px(32.));
+            assert!(
+                discography.origin.y - last_track.bottom() <= Rems(2.).to_pixels(window.rem_size())
+            );
             let backdrop = window.find("artist-backdrop-image").bounds();
             let header = window.find("artist-header").bounds();
             assert_eq!(

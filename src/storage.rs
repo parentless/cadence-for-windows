@@ -69,11 +69,32 @@ impl SelectionColor {
     }
 }
 
+/// Discrete zoom levels keep the entire rem-based UI within supported layouts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UiZoom(u16);
+
+impl Default for UiZoom {
+    fn default() -> Self {
+        Self(100)
+    }
+}
+
+impl UiZoom {
+    pub const ALL: [Self; 5] = [Self(75), Self(90), Self(100), Self(110), Self(125)];
+    pub fn percent(self) -> u16 {
+        self.0
+    }
+    pub fn from_percent(percent: u16) -> Option<Self> {
+        Self::ALL.into_iter().find(|zoom| zoom.0 == percent)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AppPreferences {
     pub sidebar_collapsed: bool,
     pub theme: ThemePreference,
     pub selection_color: SelectionColor,
+    pub ui_zoom: UiZoom,
     pub autoplay: bool,
     pub mascot: MascotPreference,
 }
@@ -84,6 +105,7 @@ impl Default for AppPreferences {
             sidebar_collapsed: false,
             theme: ThemePreference::default(),
             selection_color: SelectionColor::default(),
+            ui_zoom: UiZoom::default(),
             // Autoplay is on unless the listener turned it off.
             autoplay: true,
             mascot: MascotPreference::default(),
@@ -294,8 +316,14 @@ impl Store {
             _ => MascotPreference::default(),
         };
         let selection_color = self.preference("selection_color")?;
+        let ui_zoom = self
+            .preference("ui_zoom")?
+            .and_then(|value| value.parse().ok())
+            .and_then(UiZoom::from_percent)
+            .unwrap_or_default();
         Ok(AppPreferences {
             sidebar_collapsed,
+            ui_zoom,
             theme,
             selection_color: SelectionColor::ALL
                 .into_iter()
@@ -356,6 +384,10 @@ impl Store {
             "sidebar_collapsed",
             if collapsed { "true" } else { "false" },
         )
+    }
+
+    pub fn set_ui_zoom(&mut self, zoom: UiZoom) -> Result<()> {
+        self.set_preference("ui_zoom", &zoom.percent().to_string())
     }
 
     pub fn set_selection_color(&mut self, color: SelectionColor) -> Result<()> {
@@ -884,6 +916,19 @@ mod tests {
     }
 
     #[test]
+    fn zoom_preferences_are_bounded_and_persist_with_safe_defaults() {
+        let mut store = Store::in_memory().unwrap();
+        for zoom in super::UiZoom::ALL {
+            store.set_ui_zoom(zoom).unwrap();
+            assert_eq!(store.preferences().unwrap().ui_zoom, zoom);
+        }
+        for invalid in ["0", "5000", "-25", "NaN", "101"] {
+            store.set_preference("ui_zoom", invalid).unwrap();
+            assert_eq!(store.preferences().unwrap().ui_zoom.percent(), 100);
+        }
+    }
+
+    #[test]
     fn preferences_round_trip() {
         let mut store = Store::in_memory().unwrap();
         assert_eq!(store.preferences().unwrap(), AppPreferences::default());
@@ -900,6 +945,7 @@ mod tests {
                 sidebar_collapsed: true,
                 theme: ThemePreference::Dark,
                 selection_color: super::SelectionColor::default(),
+                ui_zoom: super::UiZoom::default(),
                 autoplay: false,
                 mascot: MascotPreference::TarantellaDancer,
             }

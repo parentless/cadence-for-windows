@@ -207,6 +207,12 @@ impl TrackList {
         track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
             .compact(compact)
             .current(is_current_track)
+            .playback_control(
+                self.player.read(cx).playing(),
+                cx.listener(|this, _, _, cx| {
+                    this.player.update(cx, |player, cx| player.toggle(cx));
+                }),
+            )
             .favorite(favorite)
             .hover_transition(
                 self.hover.transition(index, cx.background_executor().now()),

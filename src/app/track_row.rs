@@ -87,6 +87,8 @@ pub(super) struct TrackRow {
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
     current: bool,
+    playing: bool,
+    on_toggle_playback: Option<RowCallback>,
     favorite: bool,
     /// Anchored to the pointer while the context menu is open.
     menu: Option<AnyElement>,
@@ -112,6 +114,8 @@ impl TrackRow {
             image_cache,
             compact: false,
             current: false,
+            playing: false,
+            on_toggle_playback: None,
             favorite: false,
             menu: None,
             on_play: None,
@@ -142,6 +146,16 @@ impl TrackRow {
     /// responding to clicks.
     pub(super) fn current(mut self, current: bool) -> Self {
         self.current = current;
+        self
+    }
+
+    pub(super) fn playback_control(
+        mut self,
+        playing: bool,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.playing = playing;
+        self.on_toggle_playback = Some(Box::new(handler));
         self
     }
 
@@ -214,7 +228,37 @@ impl RenderOnce for TrackRow {
                     .flex_none()
                     .text_size(tokens::BODY_TEXT)
                     .text_color(rgb(palette.text_muted))
-                    .child((index + 1).to_string()),
+                    .when(!self.current, |column| {
+                        column.child((index + 1).to_string())
+                    })
+                    .when(self.current, |column| {
+                        column.child(
+                            components::button(palette, ("track-playback-toggle", index))
+                                .test_support()
+                                .aria_label(if self.playing { "Pause" } else { "Play" })
+                                .w_full()
+                                .h_8()
+                                .rounded_md()
+                                .hover(|style| style.bg(rgb(palette.control_hover)))
+                                .child(components::icon(
+                                    if self.playing {
+                                        CadenceIcon::Pause
+                                    } else {
+                                        CadenceIcon::Play
+                                    },
+                                    tokens::CONTROL_ICON,
+                                    palette.text_primary,
+                                ))
+                                .when_some(self.on_toggle_playback, |button, handler| {
+                                    button.on_click(move |event, window, cx| {
+                                        cx.stop_propagation();
+                                        if event.is_keyboard() || event.click_count() == 1 {
+                                            handler(event, window, cx);
+                                        }
+                                    })
+                                }),
+                        )
+                    }),
             )
             .child(
                 div()
