@@ -16,18 +16,26 @@ const ACTIONS_MENU_WINDOW_MARGIN: Rems = Rems(0.5);
 
 /// The column header for a track list. Lives beside `TrackRow` so the fixed
 /// columns cannot drift out of step with the rows they label.
-pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> impl IntoElement {
+pub(super) fn track_list_header(
+    palette: CadencePalette,
+    compact: bool,
+    playlist: bool,
+) -> impl IntoElement {
     div()
         .id("track-list-header")
         .test_support()
         .h_10()
         .flex_none()
-        .border_b_1()
+        .when(!playlist, |header| header.border_b_1())
         .border_color(rgb(palette.border))
         .px_3()
         .flex()
         .items_center()
-        .bg(rgb(palette.canvas))
+        .bg(rgb(if playlist {
+            palette.surface_raised
+        } else {
+            palette.canvas
+        }))
         .text_size(tokens::CAPTION_TEXT)
         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
         .text_color(rgb(palette.text_muted))
@@ -87,6 +95,7 @@ pub(super) struct TrackRow {
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
     current: bool,
+    playlist: bool,
     playing: bool,
     on_toggle_playback: Option<RowCallback>,
     favorite: bool,
@@ -114,6 +123,7 @@ impl TrackRow {
             image_cache,
             compact: false,
             current: false,
+            playlist: false,
             playing: false,
             on_toggle_playback: None,
             favorite: false,
@@ -125,6 +135,11 @@ impl TrackRow {
             on_hover: None,
             menu_position: None,
         }
+    }
+
+    pub(super) fn playlist(mut self, playlist: bool) -> Self {
+        self.playlist = playlist;
+        self
     }
 
     pub(super) fn hover_transition(
@@ -214,7 +229,7 @@ impl RenderOnce for TrackRow {
             .px_3()
             .rounded_none()
             .justify_start()
-            .border_b_1()
+            .when(!self.playlist || index > 0, |row| row.border_b_1())
             .border_color(rgb(palette.border))
             .bg(rgb(if self.current {
                 palette.selection

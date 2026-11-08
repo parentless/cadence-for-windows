@@ -1746,3 +1746,47 @@ fn settings_cache_cleanup_button_is_reachable_and_does_not_send_playback_command
     assert_eq!(fixture.route(), Route::Settings);
     fixture.no_commands();
 }
+
+#[test]
+fn volume_slider_uses_live_viewport_after_fullscreen_and_resize() {
+    let mut fixture = Fixture::new(false);
+    for (width, fraction) in [(1920., 0.25f32), (2560., 0.75), (1280., 0.5)] {
+        fixture.update(|window, _| {
+            window.toggle_fullscreen();
+            window.resize(size(px(width), px(1080.)));
+        });
+        fixture.update(|window, cx| {
+            let slider = window.find("volume-slider").bounds();
+            let position = point(
+                slider.left() + slider.size.width * fraction,
+                slider.center().y,
+            );
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        assert!((*fixture.backend.volume.borrow_and_update() - fraction).abs() < 0.02);
+        fixture.update(|window, cx| {
+            let position = window.find("volume-slider").bounds().center();
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        fixture.no_commands();
+    }
+}

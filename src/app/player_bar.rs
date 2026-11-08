@@ -480,6 +480,7 @@ impl PlayerBar {
                         controls.child(
                             div()
                                 .id("volume-slider")
+                                .test_support()
                                 .w(VOLUME_SLIDER_WIDTH)
                                 .h_6()
                                 .flex()

@@ -314,12 +314,14 @@ async fn send_frame<W: AsyncWrite + Unpin>(
         payload.len() <= MAX_FRAME_BYTES,
         "Discord frame exceeds size limit"
     );
+    // Windows Discord pipes preserve message boundaries: write the complete
+    // header and payload together rather than three separate messages.
+    let mut frame = Vec::with_capacity(8 + payload.len());
+    frame.extend_from_slice(&opcode.to_le_bytes());
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
     timeout(IO_TIMEOUT, async {
-        write.write_all(&opcode.to_le_bytes()).await?;
-        write
-            .write_all(&(payload.len() as u32).to_le_bytes())
-            .await?;
-        write.write_all(payload).await?;
+        write.write_all(&frame).await?;
         write.flush().await
     })
     .await
@@ -460,6 +462,74 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+    }
+
+    #[derive(Default)]
+    struct MessageWriter(Vec<Vec<u8>>);
+
+    impl AsyncWrite for MessageWriter {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            self.0.push(bytes.to_vec());
+            std::task::Poll::Ready(Ok(bytes.len()))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_ipc_frame_is_submitted_as_one_message() {
+        let mut writer = MessageWriter::default();
+        let payload = br#"{"v":1,"client_id":"123456789012345678"}"#;
+        send_frame(&mut writer, 0, payload).await.unwrap();
+        assert_eq!(
+            writer.0.len(),
+            1,
+            "Windows message pipes require a complete RPC frame per write"
+        );
+        let frame = &writer.0[0];
+        assert_eq!(&frame[..4], &0u32.to_le_bytes());
+        assert_eq!(&frame[4..8], &(payload.len() as u32).to_le_bytes());
+        assert_eq!(&frame[8..], payload);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_message_pipe_receives_the_entire_discord_frame() {
+        use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
+        let name = format!(
+            r"\\.\pipe\cadence-discord-frame-test-{}",
+            std::process::id()
+        );
+        let mut server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .pipe_mode(PipeMode::Message)
+            .create(&name)
+            .unwrap();
+        let mut client = ClientOptions::new().open(&name).unwrap();
+        server.connect().await.unwrap();
+        let payload = br#"{"v":1,"client_id":"123456789012345678"}"#;
+        send_frame(&mut client, 0, payload).await.unwrap();
+        let mut frame = [0; 512];
+        let count = timeout(IO_TIMEOUT, server.read(&mut frame))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(count, 8 + payload.len());
+        assert_eq!(&frame[8..count], payload);
     }
 
     #[tokio::test]

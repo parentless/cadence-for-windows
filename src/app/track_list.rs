@@ -206,6 +206,7 @@ impl TrackList {
         let favorite_track = track.clone();
         track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
             .compact(compact)
+            .playlist(self.playlist_context.is_some())
             .current(is_current_track)
             .playback_control(
                 self.player.read(cx).playing(),
@@ -458,7 +459,11 @@ impl Render for TrackList {
             .overflow_hidden()
             .relative()
             .when(!self.hide_header, |list| {
-                list.child(track_row::track_list_header(palette, compact))
+                list.child(track_row::track_list_header(
+                    palette,
+                    compact,
+                    self.playlist_context.is_some(),
+                ))
             })
             .child(
                 uniform_list(
