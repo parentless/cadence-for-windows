@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.11",
+    "cadence": "0.8.12",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "e81c889884616536034460f39bec2f1f3c0109be",
-    "lockfile_sha256": "7bb9a9b43e7fdd163b70f606cc5db99a0e047e900d895f3e4ba281172c5ccc07"
+    "revision": "e854f40785da74e2859a483696cd0a7826d5f1fc",
+    "lockfile_sha256": "2829e0ccf9053e1845693c60dc575ba6ca26ee08325e8d4e06a7dca22a27b10b"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42660147339",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42722527473",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,21 +57,19 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.11",
+      "cadence": "0.8.12",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "e81c889884616536034460f39bec2f1f3c0109be",
-      "lockfile_sha256": "7bb9a9b43e7fdd163b70f606cc5db99a0e047e900d895f3e4ba281172c5ccc07"
+      "revision": "e854f40785da74e2859a483696cd0a7826d5f1fc",
+      "lockfile_sha256": "2829e0ccf9053e1845693c60dc575ba6ca26ee08325e8d4e06a7dca22a27b10b"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42660147339"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42722527473"
   },
   "reviewed_changes": [
-    "All track rows retain a permanent vertical gap around rounded hover/selection fills; ordinary virtualized rows retain their existing stride and label/artwork centers",
-    "Artist Popular rows use a smaller constant stride; only this section becomes denser and discography follows naturally",
-    "Artist layouts preserve logical release position when zoom, column count or loaded metadata changes; initial loading still replaces the skeleton normally",
-    "Discrete wheel steps use one fixed-size per-window accumulator with 80 ms settling, preserving native line distance and bypassing precise input and reduced motion; no idle frame loop",
-    "Stable artist/header geometry avoids deferred no-op updates; row menu IDs share existing track identity instead of allocating formatted strings on repaint",
-    "Spotify Popular uses the ranked endpoint where accessible, with a once-per-session denied-access probe and existing search fallback; no private scraping or background polling",
-    "All 144 references repeat exactly on macOS 15; linked credits, sidebar pin order, scrollbar gutters, header docking and seamless backdrop fade remain intact"
+    "Cached autocomplete uses at most six references to loaded favorites, history and liked songs, with a cancellable 120 ms background match and no network request or duplicate index",
+    "New references cover the glass cached-song dropdown with keyboard selection and the static playback control during pending playback, at both widths and appearances",
+    "Album track rows omit cover elements and preserve artist links, fixed row stride, playback and context actions; the large cover has static GPU box shadows",
+    "Artist backdrop now remains visible until the final 28 percent of the header before fading to the exact page fill; seam pixel assertions remain unchanged",
+    "All 152 references repeat exactly on macOS 15; previous scrolling, pinning, gutter and linked-credit interactions remain covered"
   ]
 }
