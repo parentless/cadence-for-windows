@@ -575,8 +575,6 @@ pub(super) fn list_skeleton_rows(palette: CadencePalette, count: usize) -> Div {
                 .items_center()
                 .gap_3()
                 .px_3()
-                .border_b_1()
-                .border_color(rgb(palette.border))
                 .child(div().size_10().rounded_md().bg(rgb(palette.control)))
                 .child(
                     div()
@@ -686,7 +684,7 @@ impl HoverTransition {
         } else {
             self.from
         };
-        let channel = |shift| {
+        let channel = |shift: u32| {
             let a = ((base >> shift) & 255u32) as f32;
             let b = ((highlight >> shift) & 255u32) as f32;
             (a + (b - a) * alpha).round() as u32
@@ -708,9 +706,35 @@ impl HoverTransition {
     }
 }
 
+/// A lighter sibling of the selected fill, without an animated material pass.
+pub(super) fn hover_fill(selected: u32) -> u32 {
+    let lift = if ((selected >> 16) & 255) + ((selected >> 8) & 255) + (selected & 255) > 480 {
+        50
+    } else {
+        14
+    };
+    let channel = |shift: u32| {
+        let value = (selected >> shift) & 255u32;
+        value + (255 - value) * lift / 100
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
 #[cfg(test)]
 mod hover_tests {
     use super::*;
+
+    #[test]
+    fn hover_is_lighter_than_every_selected_colour_in_both_appearances() {
+        let luminance =
+            |rgb: u32| ((rgb >> 16) & 255) * 2126 + ((rgb >> 8) & 255) * 7152 + (rgb & 255) * 722;
+        for dark in [false, true] {
+            for colour in crate::storage::SelectionColor::ALL {
+                let selected = colour.fill(dark);
+                assert!(luminance(super::hover_fill(selected)) > luminance(selected));
+            }
+        }
+    }
 
     #[test]
     fn interrupted_hover_is_continuous_and_settles_without_frame_demand() {

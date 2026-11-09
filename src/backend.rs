@@ -3488,6 +3488,7 @@ mod tests {
         assert!(worker.pending_playlist_cursor.is_none());
         worker
             .finish_playlist_page(Some(Ok(Ok(crate::model::PlaylistTrackPage {
+                source_offsets: vec![],
                 tracks: vec![favorite(); 15],
                 next_offset: Some(30),
                 total: 100,

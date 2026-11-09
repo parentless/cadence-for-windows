@@ -40,6 +40,7 @@ use workspace::Workspace;
 
 mod http;
 mod image_cache;
+mod playlist_buffer;
 
 #[cfg(test)]
 pub(crate) mod test_support;

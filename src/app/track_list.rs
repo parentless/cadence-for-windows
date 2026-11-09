@@ -10,13 +10,13 @@ use page::PageEvent;
 /// dismisses it. Dismissal that no click drives -- a keyboard route change, a
 /// scroll outside the table -- is the workspace's to trigger, via
 /// `close_menu`, because the menu outlives the page going off screen.
-pub(super) struct LoadMoreTracks;
+pub(super) struct LoadMoreTracks(pub Range<usize>);
 
 pub(super) struct TrackList {
     /// Set by `show`, which always runs before the list is first painted.
     id: Option<ElementId>,
     tracks: Arc<[model::Track]>,
-    playlist_tracks: Option<Rc<RefCell<Vec<model::Track>>>>,
+    playlist_tracks: Option<Rc<RefCell<playlist_buffer::PlaylistBuffer>>>,
     shown_playlist_len: usize,
     /// The row whose action menu is open, keyed by source ID and row index so
     /// the same track appearing twice opens only the row that was clicked.
@@ -25,8 +25,7 @@ pub(super) struct TrackList {
     queue_mode: bool,
     hide_header: bool,
     playlist_context: Option<(model::Playlist, Option<u32>)>,
-    can_load_more: bool,
-    load_more_emitted: bool,
+    last_viewport: Option<Range<usize>>,
     scroll: gpui_kit::UniformListScrollHandle,
     hover: components::HoverHighlight,
     palette: Option<CadencePalette>,
@@ -53,8 +52,7 @@ impl TrackList {
             queue_mode: false,
             hide_header: false,
             playlist_context: None,
-            can_load_more: false,
-            load_more_emitted: false,
+            last_viewport: None,
             scroll: gpui_kit::UniformListScrollHandle::new(),
             hover: components::HoverHighlight::default(),
             palette: None,
@@ -87,6 +85,13 @@ impl TrackList {
     pub(super) fn without_header(mut self) -> Self {
         self.hide_header = true;
         self
+    }
+
+    pub(super) fn set_palette(&mut self, palette: CadencePalette, cx: &mut Context<Self>) {
+        if self.palette.is_none_or(|old| old.canvas != palette.canvas) {
+            self.palette = Some(palette);
+            cx.notify();
+        }
     }
 
     pub(super) fn scroll_handle(&self) -> gpui_kit::UniformListScrollHandle {
@@ -124,7 +129,7 @@ impl TrackList {
         self.id = id;
         self.playlist_tracks = None;
         self.tracks = tracks;
-        self.load_more_emitted = false;
+        self.last_viewport = None;
         self.menu_open = None;
         cx.notify();
     }
@@ -134,11 +139,11 @@ impl TrackList {
     pub(super) fn show_playlist(
         &mut self,
         id: impl Into<ElementId>,
-        tracks: Rc<RefCell<Vec<model::Track>>>,
+        tracks: Rc<RefCell<playlist_buffer::PlaylistBuffer>>,
         cx: &mut Context<Self>,
     ) {
         let id = Some(id.into());
-        let len = tracks.borrow().len();
+        let len = tracks.borrow().revision;
         if self.id == id
             && self
                 .playlist_tracks
@@ -155,7 +160,7 @@ impl TrackList {
         self.tracks = Arc::default();
         self.playlist_tracks = Some(tracks);
         self.shown_playlist_len = len;
-        self.load_more_emitted = false;
+        self.last_viewport = None;
         self.menu_open = None;
         cx.notify();
     }
@@ -201,7 +206,27 @@ impl TrackList {
             self.tracks.get(index).cloned()
         };
         let Some(track) = track else {
-            return div().into_any_element();
+            let palette = self
+                .palette
+                .unwrap_or_else(|| appearance::Appearance::palette(cx));
+            let unavailable = self
+                .playlist_tracks
+                .as_ref()
+                .is_some_and(|tracks| tracks.borrow().contains(index));
+            return div()
+                .h_16()
+                .w_full()
+                .when(unavailable, |row| {
+                    row.px_3()
+                        .flex()
+                        .items_center()
+                        .text_color(rgb(palette.text_muted))
+                        .child(format!("{}   Unavailable track", index + 1))
+                })
+                .when(!unavailable, |row| {
+                    row.child(components::list_skeleton_rows(palette, 1))
+                })
+                .into_any_element();
         };
         let mut palette = self
             .palette
@@ -219,7 +244,6 @@ impl TrackList {
         let favorite_track = track.clone();
         track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
             .compact(compact)
-            .playlist(self.playlist_context.is_some())
             .current(is_current_track)
             .playback_control(
                 self.player.read(cx).playing(),
@@ -261,10 +285,7 @@ impl TrackList {
         loading: bool,
     ) {
         self.playlist_context = Some((playlist, next_offset));
-        self.can_load_more = next_offset.is_some() && !loading;
-        if loading {
-            self.load_more_emitted = false;
-        }
+        let _ = loading;
     }
 
     fn play_from(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -273,17 +294,18 @@ impl TrackList {
                 .update(cx, |player, cx| player.play_queue_item(index, cx));
             return;
         }
-        let tracks = self
-            .playlist_tracks
-            .as_ref()
-            .map_or_else(|| self.tracks.to_vec(), |tracks| tracks.borrow().clone());
-        self.player.update(cx, |player, cx| {
-            if let Some((playlist, next)) = self.playlist_context.clone() {
-                player.play_playlist(playlist, tracks, index, next, cx)
-            } else {
-                player.play_context(tracks, index, cx)
+        if let (Some(buffer), Some((playlist, _))) = (&self.playlist_tracks, &self.playlist_context)
+        {
+            if let Some((tracks, index, next)) = buffer.borrow().playback(index) {
+                self.player.update(cx, |player, cx| {
+                    player.play_playlist(playlist.clone(), tracks, index, next, cx)
+                });
             }
-        });
+        } else {
+            let tracks = self.tracks.to_vec();
+            self.player
+                .update(cx, |player, cx| player.play_context(tracks, index, cx));
+        }
     }
 
     fn action_menu(
@@ -472,31 +494,15 @@ impl Render for TrackList {
             .overflow_hidden()
             .relative()
             .when(!self.hide_header, |list| {
-                list.child(track_row::track_list_header(
-                    palette,
-                    compact,
-                    self.playlist_context.is_some(),
-                ))
+                list.child(track_row::track_list_header(palette, compact))
             })
             .child(
                 uniform_list(
                     self.id
                         .clone()
                         .expect("show sets the id before first paint"),
-                    self.track_count()
-                        + usize::from(
-                            self.playlist_context
-                                .as_ref()
-                                .is_some_and(|(_, next)| next.is_some()),
-                        ),
+                    self.track_count(),
                     cx.processor(move |this, range: Range<usize>, _, cx| {
-                        if this.can_load_more
-                            && !this.load_more_emitted
-                            && range.end >= this.track_count().saturating_sub(3)
-                        {
-                            this.load_more_emitted = true;
-                            cx.emit(LoadMoreTracks);
-                        }
                         range
                             .map(|index| {
                                 if index < this.track_count() {
@@ -512,6 +518,11 @@ impl Render for TrackList {
                             .collect()
                     }),
                 )
+                .when(self.playlist_tracks.is_some(), |list| {
+                    list.with_decoration(PlaylistViewport {
+                        list: cx.entity().downgrade(),
+                    })
+                })
                 .track_scroll(&self.scroll)
                 .flex_1()
                 .min_h_0(),
@@ -520,6 +531,33 @@ impl Render for TrackList {
                 gpui_kit::base::Scrollbar::vertical(&self.scroll)
                     .mode(gpui_kit::base::ScrollbarMode::Always),
             )
+    }
+}
+
+// GPUI invokes the row renderer while measuring row zero as well as while
+// drawing the viewport. Observe the actual visible range here, so measurement
+// cannot reset the debounce or accidentally fetch page zero on a distant jump.
+struct PlaylistViewport {
+    list: gpui_kit::WeakEntity<TrackList>,
+}
+impl gpui_kit::UniformListDecoration for PlaylistViewport {
+    fn compute(
+        &self,
+        range: Range<usize>,
+        _: Bounds<Pixels>,
+        _: gpui_kit::Point<Pixels>,
+        _: Pixels,
+        _: usize,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let _ = self.list.update(cx, |list, cx| {
+            if list.last_viewport.as_ref() != Some(&range) {
+                list.last_viewport = Some(range.clone());
+                cx.emit(LoadMoreTracks(range));
+            }
+        });
+        div().into_any_element()
     }
 }
 

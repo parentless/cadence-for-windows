@@ -1,0 +1,9 @@
+{
+  "reported_on": "2026-11-08",
+  "source": "User-reported Windows observations; not independently measured",
+  "metric": "Reported RAM usage in MB; exact process accounting unspecified",
+  "observations": [
+    {"name": "Cadence", "min_mb": 50, "max_mb": 70},
+    {"name": "Spotify", "min_mb": 400, "max_mb": 700}
+  ]
+}

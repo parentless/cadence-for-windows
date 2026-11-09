@@ -16,27 +16,16 @@ const ACTIONS_MENU_WINDOW_MARGIN: Rems = Rems(0.5);
 
 /// The column header for a track list. Lives beside `TrackRow` so the fixed
 /// columns cannot drift out of step with the rows they label.
-pub(super) fn track_list_header(
-    palette: CadencePalette,
-    compact: bool,
-    playlist: bool,
-) -> impl IntoElement {
+pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> impl IntoElement {
     div()
         .id("track-list-header")
         .test_support()
         .h_10()
         .flex_none()
-        .when(!playlist, |header| header.border_b_1())
-        .border_color(rgb(palette.border))
         .px_3()
         .flex()
         .items_center()
-        .bg(rgb(if playlist {
-            palette.surface_raised
-        } else {
-            palette.canvas
-        }))
-        .text_size(tokens::CAPTION_TEXT)
+        .text_size(tokens::BODY_TEXT)
         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
         .text_color(rgb(palette.text_muted))
         .child(div().w(INDEX_COLUMN_WIDTH).flex_none().child("#"))
@@ -95,7 +84,6 @@ pub(super) struct TrackRow {
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
     current: bool,
-    playlist: bool,
     playing: bool,
     on_toggle_playback: Option<RowCallback>,
     favorite: bool,
@@ -123,7 +111,6 @@ impl TrackRow {
             image_cache,
             compact: false,
             current: false,
-            playlist: false,
             playing: false,
             on_toggle_playback: None,
             favorite: false,
@@ -135,11 +122,6 @@ impl TrackRow {
             on_hover: None,
             menu_position: None,
         }
-    }
-
-    pub(super) fn playlist(mut self, playlist: bool) -> Self {
-        self.playlist = playlist;
-        self
     }
 
     pub(super) fn hover_transition(
@@ -227,10 +209,8 @@ impl RenderOnce for TrackRow {
             .w_full()
             .h_16()
             .px_3()
-            .rounded_none()
+            .rounded_lg()
             .justify_start()
-            .when(!self.playlist || index > 0, |row| row.border_b_1())
-            .border_color(rgb(palette.border))
             .bg(rgb(if self.current {
                 palette.selection
             } else {
@@ -397,8 +377,14 @@ impl RenderOnce for TrackRow {
                     }
                 })
             });
-        if let Some(transition) = self.hover_transition {
-            transition.apply(row, window, base, palette.selection, cx.reduce_motion())
+        if let Some(transition) = self.hover_transition.filter(|_| !self.current) {
+            transition.apply(
+                row,
+                window,
+                base,
+                components::hover_fill(palette.selection),
+                cx.reduce_motion(),
+            )
         } else {
             row.into_any_element()
         }
@@ -453,9 +439,7 @@ impl RenderOnce for PlaylistRow {
             .px_3()
             .justify_start()
             .gap_3p5()
-            .rounded_none()
-            .border_b_1()
-            .border_color(rgb(palette.border))
+            .rounded_lg()
             .hover(|style| style.bg(rgb(palette.surface_hover)))
             .child(components::artwork(
                 palette,

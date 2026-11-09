@@ -7,6 +7,11 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy)]
 enum Scene {
     Artist,
+    ArtistLoading,
+    TrackHover,
+    AlbumTint,
+    PlaylistTail,
+    ReadmeGlaive,
     PlaylistsLoading,
     PlaylistTracks,
     PlaylistHover,
@@ -41,6 +46,10 @@ enum Scene {
 fn scenes() -> Vec<(&'static str, Scene)> {
     vec![
         ("artist", Scene::Artist),
+        ("artist-loading", Scene::ArtistLoading),
+        ("track-hover", Scene::TrackHover),
+        ("album-tint", Scene::AlbumTint),
+        ("playlist-tail", Scene::PlaylistTail),
         ("artist-zoom-large", Scene::ArtistZoomLarge),
         ("artist-account-menu", Scene::ArtistMenu),
         ("playlists-loading", Scene::PlaylistsLoading),
@@ -137,7 +146,11 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             .expect("pinned Inter fonts");
     });
     let mut backend = cx.update(|cx| initialize(cx, theme));
-    let height = 820.;
+    let height = if matches!(scene, Scene::ReadmeGlaive) {
+        960.
+    } else {
+        820.
+    };
     let handle = if matches!(scene, Scene::Setup | Scene::SetupFilled) {
         cx.update(|cx| {
             services::AppServices::session(cx).update(cx, |session, cx| {
@@ -221,11 +234,37 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                         command => panic!("unexpected artist command: {command:?}"),
                     }
                 }
+                Scene::ArtistLoading => workspace.open_artist(model::ArtistRef { name: "Artist".into(), source_id: Some("loading".into()), spotify_uri: None }, Route::LikedSongs, cx),
+                Scene::AlbumTint => {
+                    let url = "https://fixtures.invalid/blue-album.png";
+                    let pixels = image::RgbaImage::from_pixel(64, 64, image::Rgba([210, 110, 70, 255]));
+                    services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(pixels)]))));
+                    workspace.open_album(model::AlbumRef { name: "Blue hours".into(), source_id: Some("blue-album".into()), artwork_url: Some(url.into()), ..Default::default() }, Route::LikedSongs, cx);
+                    let BackendCommand::LoadAlbum { respond, .. } = backend.commands.try_recv().unwrap() else { panic!() };
+                    respond.send(Ok((model::Album { provider: model::Provider::Spotify, source_id: "blue-album".into(), spotify_uri: None, name: "Blue hours".into(), artists: vec![], release_date: Some("2026-01-01".into()), artwork_url: Some(url.into()), track_count: Some(30) }, (0..30).map(track).collect()))).unwrap();
+                }
+                Scene::ReadmeGlaive => {
+                    let path = std::env::var("CADENCE_README_FIXTURE").expect("README fixture path");
+                    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    let artist: model::Artist = serde_json::from_value(value["artist"].clone()).unwrap();
+                    let tracks: Vec<model::Track> = serde_json::from_value(value["tracks"].clone()).unwrap();
+                    let albums: Vec<model::Album> = serde_json::from_value(value["albums"].clone()).unwrap();
+                    for artwork in value["artworks"].as_array().unwrap() {
+                        let path = artwork["path"].as_str().unwrap();
+                        let mut pixels = image::open(path).unwrap().to_rgba8();
+                        for pixel in pixels.pixels_mut() { pixel.0.swap(0, 2); }
+                        services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(artwork["url"].as_str().unwrap(), Arc::new(gpui_kit::RenderImage::new([image::Frame::new(pixels)]))));
+                    }
+                    workspace.open_artist(model::ArtistRef { name: artist.name.clone(), source_id: Some(artist.source_id.clone()), spotify_uri: artist.spotify_uri.clone() }, Route::LikedSongs, cx);
+                    let BackendCommand::LoadArtist { respond, .. } = backend.commands.try_recv().unwrap() else { panic!() };
+                    respond.send(Ok((artist, tracks.clone(), albums))).unwrap();
+                    services::AppServices::player(cx).update(cx, |player, cx| { player.handle_backend_event(BackendEvent::PlaybackSnapshotLoaded { current: tracks[0].clone(), next: tracks[1..].to_vec(), position_ms: 60_000 }, cx); });
+                }
                 Scene::PlaylistsLoading => {
                     workspace.library.update(cx, |library, cx| library.clear(cx));
                     workspace.navigate(Route::Playlists, cx);
                 }
-                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed | Scene::PlaylistTooltip => {
+                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed | Scene::PlaylistTooltip | Scene::PlaylistTail => {
                     let artwork_url = "https://fixtures.invalid/sidebar-cover.png";
                     let cover = image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([45 + (x*2) as u8, 50 + (y*2) as u8, 160, 255]));
                     services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(artwork_url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(cover)]))));
@@ -244,7 +283,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     workspace.load_playlist(selected, cx);
                     workspace.navigate(Route::Playlist, cx);
                     match backend.commands.try_recv().expect("playlist request") {
-                        BackendCommand::LoadPlaylist { respond, .. } => { respond.send(Ok(model::PlaylistTrackPage { tracks: (0..15).map(track).collect(), next_offset: Some(15), total: 1000 })).unwrap(); }
+                        BackendCommand::LoadPlaylist { respond, .. } => { respond.send(Ok(model::PlaylistTrackPage { source_offsets: vec![], tracks: (0..15).map(track).collect(), next_offset: Some(15), total: 1000 })).unwrap(); }
                         _ => panic!("expected playlist request"),
                     }
                 }
@@ -294,6 +333,30 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     gpui_kit::ScrollWheelEvent {
                         position,
                         delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+                        modifiers: Default::default(),
+                        touch_phase: gpui_kit::TouchPhase::Moved,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
+        Scene::TrackHover => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.hover(("spotify-track", 1usize), cx)
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
+        Scene::PlaylistTail => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                let position = window.find(("spotify-track", 1usize)).bounds().center();
+                window.dispatch_event(
+                    gpui_kit::ScrollWheelEvent {
+                        position,
+                        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-100_000.))),
                         modifiers: Default::default(),
                         touch_phase: gpui_kit::TouchPhase::Moved,
                     }
@@ -538,6 +601,13 @@ pub(crate) fn run() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
+    if std::env::args().any(|argument| argument == "--readme-glaive") {
+        let screenshot = capture(Scene::ReadmeGlaive, ThemePreference::Dark, 1280.);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/glaive-profile.png");
+        save_artifact(&screenshot, &path);
+        println!("{}", path.display());
+        return;
+    }
     if std::env::args().any(|argument| argument == "--artist-overlay-preview") {
         let previews = artifacts.with_file_name("artist-previews");
         std::fs::create_dir_all(&previews).expect("preview directory");

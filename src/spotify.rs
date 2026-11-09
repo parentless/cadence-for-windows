@@ -555,7 +555,8 @@ impl Spotify {
                 .map(|_| page.offset.saturating_add(page.items.len() as u32));
             let total = page.total;
             let mut tracks = Vec::with_capacity(page.items.len());
-            for item in page.items {
+            let mut source_offsets = Vec::with_capacity(page.items.len());
+            for (index, item) in page.items.into_iter().enumerate() {
                 if item.is_local {
                     continue;
                 }
@@ -564,12 +565,14 @@ impl Spotify {
                 {
                     let track = convert_track(track)?;
                     if track.is_displayable() {
+                        source_offsets.push(offset.saturating_add(index as u32));
                         tracks.push(track);
                     }
                 }
             }
             Ok(crate::model::PlaylistTrackPage {
                 tracks,
+                source_offsets,
                 next_offset: next_offset.filter(|next| *next > offset),
                 total,
             })

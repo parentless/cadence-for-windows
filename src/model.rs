@@ -163,6 +163,7 @@ mod tests {
 /// Advancing by displayed rows would repeat entries on mixed playlists.
 #[derive(Clone, Debug)]
 pub struct PlaylistTrackPage {
+    pub source_offsets: Vec<u32>,
     pub tracks: Vec<Track>,
     pub next_offset: Option<u32>,
     pub total: u32,

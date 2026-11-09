@@ -17,7 +17,13 @@ const MAX_IMAGES: usize = 48;
 const MAX_DECODED_BYTES: usize = 32 * 1024 * 1024;
 const FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5);
 
-type ImageLoadingTask = Shared<Task<Result<Arc<RenderImage>, ImageCacheError>>>;
+#[derive(Clone)]
+struct DecodedArtwork {
+    image: Arc<RenderImage>,
+    tint: u32,
+}
+
+type ImageLoadingTask = Shared<Task<Result<DecodedArtwork, ImageCacheError>>>;
 
 enum CacheEntry {
     Loading {
@@ -27,6 +33,7 @@ enum CacheEntry {
     },
     Loaded {
         image: Arc<RenderImage>,
+        tint: u32,
         decoded_bytes: usize,
     },
     Failed {
@@ -48,13 +55,14 @@ impl CacheEntry {
                     return (None, 0);
                 };
                 match result {
-                    Ok(image) => {
+                    Ok(DecodedArtwork { image, tint }) => {
                         let decoded_bytes = (0..image.frame_count())
                             .filter_map(|frame| image.as_bytes(frame))
                             .map(<[u8]>::len)
                             .sum();
                         *self = Self::Loaded {
                             image: image.clone(),
+                            tint,
                             decoded_bytes,
                         };
                         (Some(Ok(image)), decoded_bytes)
@@ -145,6 +153,7 @@ impl BoundedImageCache {
             self.items.insert(
                 key.clone(),
                 CacheEntry::Loaded {
+                    tint: dominant_dark_tint(&image),
                     image,
                     decoded_bytes,
                 },
@@ -178,10 +187,35 @@ impl BoundedImageCache {
         self.evict_to_budget(1, window, cx);
         let image = cx
             .background_executor()
-            .spawn(async move { blur_artist_image(&source) })
+            .spawn(async move {
+                let image = blur_artist_image(&source)?;
+                Ok(DecodedArtwork {
+                    tint: dominant_dark_tint(&image),
+                    image,
+                })
+            })
             .shared();
         self.insert_loading(&key, image, window, cx);
         None
+    }
+
+    /// The decode task calculates this once; the scalar shares the image's LRU
+    /// lifetime and never retains another bitmap or an unbounded URL map.
+    pub(super) fn artwork_tint(
+        &mut self,
+        url: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<u32> {
+        let key = Resource::Uri(url.to_owned().into());
+        if let Some(CacheEntry::Loaded { tint, .. }) = self.items.get(&key) {
+            return Some(*tint);
+        }
+        self.load(&key, window, cx)?.ok()?;
+        match self.items.get(&key) {
+            Some(CacheEntry::Loaded { tint, .. }) => Some(*tint),
+            _ => None,
+        }
     }
 
     fn insert_loading(
@@ -231,6 +265,7 @@ impl BoundedImageCache {
                 if let CacheEntry::Loaded {
                     image,
                     decoded_bytes,
+                    ..
                 } = item
                 {
                     self.decoded_bytes = self.decoded_bytes.saturating_sub(decoded_bytes);
@@ -281,10 +316,63 @@ impl ImageCache for BoundedImageCache {
         self.misses += 1;
         self.evict_to_budget(1, window, cx);
         let future = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
-        let image = cx.background_executor().spawn(future).shared();
+        let image = cx
+            .background_executor()
+            .spawn(async move {
+                let image = future.await?;
+                Ok(DecodedArtwork {
+                    tint: dominant_dark_tint(&image),
+                    image,
+                })
+            })
+            .shared();
         self.insert_loading(resource, image, window, cx);
         None
     }
+}
+
+// Sample a maximum of 1,024 pixels into 512 quantized RGB buckets. GPUI's
+// decoded first-frame bytes are BGRA. Work happens once on the decode executor.
+fn dominant_dark_tint(image: &RenderImage) -> u32 {
+    let Some(bytes) = image.as_bytes(0) else {
+        return 0x242426;
+    };
+    let size = image.size(0);
+    let width = size.width.0 as usize;
+    let height = size.height.0 as usize;
+    if width == 0 || height == 0 {
+        return 0x242426;
+    }
+    let mut counts = [0u16; 512];
+    let samples = || {
+        (0..32).flat_map(|y| {
+            (0..32).filter_map(move |x| {
+                let index = ((y * height / 32) * width + x * width / 32) * 4;
+                let pixel = bytes.get(index..index + 4)?;
+                (pixel[3] >= 128).then_some([pixel[2], pixel[1], pixel[0]])
+            })
+        })
+    };
+    let bucket = |rgb: [u8; 3]| {
+        ((rgb[0] as usize >> 5) << 6) | ((rgb[1] as usize >> 5) << 3) | (rgb[2] as usize >> 5)
+    };
+    for pixel in samples() {
+        counts[bucket(pixel)] += 1;
+    }
+    let Some((dominant, count)) = counts.iter().enumerate().max_by_key(|(_, count)| **count) else {
+        return 0x242426;
+    };
+    if *count == 0 {
+        return 0x242426;
+    }
+    let mut sum = [0u32; 3];
+    for pixel in samples().filter(|pixel| bucket(*pixel) == dominant) {
+        for channel in 0..3 {
+            sum[channel] += u32::from(pixel[channel]);
+        }
+    }
+    let dark = |index: usize| 12 + (sum[index] / u32::from(*count)) / 5;
+    (dark(0) << 16) | (dark(1) << 8) | dark(2)
 }
 
 /// Work runs on the background executor, never in layout or paint. At most
@@ -318,6 +406,27 @@ fn blur_artist_image(source: &RenderImage) -> Result<Arc<RenderImage>, ImageCach
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dominant_tint_uses_the_largest_colour_bucket_and_stays_dark() {
+        let pixels = image::RgbaImage::from_fn(32, 32, |x, _| {
+            if x < 24 {
+                image::Rgba([255, 0, 0, 255])
+            } else {
+                image::Rgba([0, 0, 255, 255])
+            }
+        });
+        let source = RenderImage::new([image::Frame::new(pixels)]);
+        assert_eq!(dominant_dark_tint(&source), 0x0C0C3F); // source BGRA: mostly blue
+        let white = RenderImage::new([image::Frame::new(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([255; 4]),
+        ))]);
+        assert_eq!(dominant_dark_tint(&white), 0x3F3F3F);
+        let transparent = RenderImage::new([image::Frame::new(image::RgbaImage::new(1, 1))]);
+        assert_eq!(dominant_dark_tint(&transparent), 0x242426);
+    }
 
     fn resource(name: &'static str) -> Resource {
         Resource::Embedded(name.into())

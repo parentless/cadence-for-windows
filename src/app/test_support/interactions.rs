@@ -1318,6 +1318,7 @@ fn playlist_fetches_small_pages_only_near_the_scroll_end_and_preserves_playback_
     assert_eq!(offset, 0);
     respond
         .send(Ok(model::PlaylistTrackPage {
+            source_offsets: vec![],
             tracks: (0..15).map(track).collect(),
             next_offset: Some(15),
             total: 1000,
@@ -1354,6 +1355,9 @@ fn playlist_fetches_small_pages_only_near_the_scroll_end_and_preserves_playback_
             cx,
         );
     });
+    fixture.no_commands();
+    fixture.cx.advance_clock(Duration::from_millis(100));
+    fixture.update(|_, _| {});
     let BackendCommand::LoadPlaylist {
         offset, respond, ..
     } = fixture.backend.commands.try_recv().unwrap()
@@ -1364,6 +1368,7 @@ fn playlist_fetches_small_pages_only_near_the_scroll_end_and_preserves_playback_
     fixture.no_commands(); // further frames/scrolls cannot duplicate an in-flight request
     respond
         .send(Ok(model::PlaylistTrackPage {
+            source_offsets: vec![],
             tracks: (15..30).map(track).collect(),
             next_offset: None,
             total: 30,
@@ -1374,7 +1379,7 @@ fn playlist_fetches_small_pages_only_near_the_scroll_end_and_preserves_playback_
 }
 
 #[test]
-fn playlist_skips_empty_filtered_pages_and_retries_without_discarding_loaded_tracks() {
+fn playlist_keeps_raw_offsets_for_unavailable_rows_and_retries_visible_pages() {
     let mut fixture = Fixture::new(false);
     let workspace = fixture.workspace.clone().unwrap();
     fixture.update(|_, cx| {
@@ -1389,30 +1394,27 @@ fn playlist_skips_empty_filtered_pages_and_retries_without_discarding_loaded_tra
     };
     respond
         .send(Ok(model::PlaylistTrackPage {
-            tracks: vec![],
+            source_offsets: vec![0, 2, 5],
+            tracks: (0..3).map(track).collect(),
             next_offset: Some(15),
             total: 40,
         }))
         .unwrap();
     fixture.update(|_, _| {});
-    let BackendCommand::LoadPlaylist {
-        offset, respond, ..
+    fixture.no_commands();
+    fixture.update(|window, cx| window.double_click(("spotify-track", 5usize), cx));
+    let BackendCommand::PlayPlaylistContext {
+        index,
+        next_offset,
+        tracks,
+        ..
     } = fixture.backend.commands.try_recv().unwrap()
     else {
         panic!()
     };
-    assert_eq!(offset, 15);
-    respond
-        .send(Ok(model::PlaylistTrackPage {
-            tracks: (0..15).map(track).collect(),
-            next_offset: Some(30),
-            total: 40,
-        }))
-        .unwrap();
-    fixture.update(|_, _| {});
-    fixture.no_commands();
+    assert_eq!((index, next_offset, tracks.len()), (2, Some(15), 3));
     fixture.update(|window, cx| {
-        let position = window.find(("spotify-track", 1usize)).bounds().center();
+        let position = window.find(("spotify-track", 5usize)).bounds().center();
         window.dispatch_event(
             gpui_kit::ScrollWheelEvent {
                 position,
@@ -1424,23 +1426,108 @@ fn playlist_skips_empty_filtered_pages_and_retries_without_discarding_loaded_tra
             cx,
         );
     });
+    fixture.cx.advance_clock(Duration::from_millis(100));
+    fixture.update(|_, _| {});
     let BackendCommand::LoadPlaylist {
         offset, respond, ..
     } = fixture.backend.commands.try_recv().unwrap()
     else {
         panic!()
     };
-    assert_eq!(offset, 30);
+    assert_eq!(offset, 15);
     respond.send(Err(anyhow::anyhow!("offline"))).unwrap();
     fixture.update(|_, _| {});
-    fixture.update(|window, cx| {
-        assert!(window.try_find("playlist-retry-page").is_some());
-        window.click("playlist-retry-page", cx);
-    });
+    fixture.cx.advance_clock(Duration::from_secs(1));
+    fixture.update(|_, _| {});
+    fixture.no_commands(); // an error banner resizing the viewport must not trigger retries
+    fixture.update(|window, cx| window.click("playlist-retry-page", cx));
+    fixture.cx.advance_clock(Duration::from_millis(100));
+    fixture.update(|_, _| {});
     assert!(matches!(
         fixture.backend.commands.try_recv().unwrap(),
-        BackendCommand::LoadPlaylist { offset: 30, .. }
+        BackendCommand::LoadPlaylist { offset: 15, .. }
     ));
+}
+
+#[test]
+fn playlist_scroll_jumps_directly_to_the_final_viewport_after_debounce() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.load_playlist(
+                model::Playlist {
+                    track_count: 100_000,
+                    ..paged_playlist()
+                },
+                cx,
+            );
+            workspace.navigate(Route::Playlist, cx);
+        })
+    });
+    let BackendCommand::LoadPlaylist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            source_offsets: vec![],
+            tracks: (0..15).map(track).collect(),
+            next_offset: Some(15),
+            total: 100_000,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    let position =
+        fixture.update(|window, _| window.find(("spotify-track", 1usize)).bounds().center());
+    for delta in [-100_000_000., 100_000_000., -100_000_000.] {
+        fixture.update(|window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position,
+                    delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(delta))),
+                    modifiers: Default::default(),
+                    touch_phase: gpui_kit::TouchPhase::Moved,
+                }
+                .to_platform_input(),
+                cx,
+            )
+        });
+    }
+    fixture.update(|_, _| {});
+    fixture.cx.advance_clock(Duration::from_millis(99));
+    fixture.update(|_, _| {});
+    fixture.no_commands();
+    fixture.cx.advance_clock(Duration::from_millis(1));
+    fixture.update(|_, _| {});
+    let BackendCommand::LoadPlaylist {
+        offset, respond, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("visible page request")
+    };
+    assert_eq!(offset, 99_990);
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            source_offsets: vec![],
+            tracks: (99_990..100_000).map(track).collect(),
+            next_offset: None,
+            total: 100_000,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| window.double_click(("spotify-track", 99_999usize), cx));
+    let BackendCommand::PlayPlaylistContext {
+        tracks,
+        index,
+        next_offset,
+        ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!((tracks.len(), index, next_offset), (10, 9, None));
+    fixture.no_commands();
 }
 
 #[test]
@@ -1887,6 +1974,7 @@ fn returning_to_a_recent_playlist_restores_loaded_tracks_and_scroll_without_fetc
         assert_eq!(offset, 0);
         respond
             .send(Ok(model::PlaylistTrackPage {
+                source_offsets: vec![],
                 tracks: (0..40).map(track).collect(),
                 next_offset: None,
                 total: 40,
@@ -1987,4 +2075,58 @@ fn recent_album_pages_restore_scroll_without_refetching() {
     fixture.no_commands();
     fixture
         .update(|window, _| assert_eq!(window.find(("spotify-track", 15usize)).bounds(), before));
+}
+
+#[test]
+fn playlist_play_skips_unavailable_start_pages_without_loading_the_whole_list() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.load_playlist(paged_playlist(), cx);
+            workspace.navigate(Route::Playlist, cx);
+        })
+    });
+    let BackendCommand::LoadPlaylist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            source_offsets: vec![],
+            tracks: vec![],
+            next_offset: Some(15),
+            total: 1000,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click("playlist-play", cx));
+    let BackendCommand::LoadPlaylist {
+        offset, respond, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(offset, 15);
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            source_offsets: vec![17],
+            tracks: vec![track(2)],
+            next_offset: Some(30),
+            total: 1000,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    let BackendCommand::PlayPlaylistContext {
+        tracks,
+        index,
+        next_offset,
+        ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!((tracks, index, next_offset), (vec![track(2)], 0, Some(30)));
+    fixture.no_commands();
 }

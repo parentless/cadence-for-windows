@@ -157,12 +157,17 @@ const RETAINED_PAGE_TRACK_LIMIT: usize = 1_024;
 const RETAINED_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
 fn can_retain_tracks(tracks: &[model::Track]) -> bool {
-    if tracks.len() > RETAINED_PAGE_TRACK_LIMIT {
-        return false;
-    }
+    can_retain_iter(tracks.iter())
+}
+
+fn can_retain_iter<'a>(tracks: impl Iterator<Item = &'a model::Track>) -> bool {
     let text_bytes = |value: &Option<String>| value.as_ref().map_or(0, String::capacity);
-    let mut bytes = std::mem::size_of_val(tracks);
-    for track in tracks {
+    let mut bytes: usize = 0;
+    for (index, track) in tracks.enumerate() {
+        if index >= RETAINED_PAGE_TRACK_LIMIT {
+            return false;
+        }
+        bytes = bytes.saturating_add(std::mem::size_of::<model::Track>());
         bytes = bytes
             .saturating_add(track.source_id.capacity())
             .saturating_add(track.title.len())
@@ -194,7 +199,7 @@ fn can_retain_tracks(tracks: &[model::Track]) -> bool {
 
 struct PlaylistSnapshot {
     playlist: model::Playlist,
-    tracks: Rc<RefCell<Vec<model::Track>>>,
+    tracks: Rc<RefCell<playlist_buffer::PlaylistBuffer>>,
     next_offset: Option<u32>,
     scroll: gpui_kit::UniformListScrollHandle,
     loaded_at: SystemTime,
@@ -210,11 +215,15 @@ struct AlbumSnapshot {
 
 /// The tracks of one Spotify playlist.
 pub(super) struct PlaylistPage {
+    viewport_request: Option<gpui_kit::Task<()>>,
+    visible_range: Range<usize>,
+    request_offset: Option<u32>,
+    play_on_load: bool,
     previous: Option<PlaylistSnapshot>,
     loaded_at: Option<SystemTime>,
     backend: BackendHandle,
     pub(super) selected: Option<model::Playlist>,
-    tracks: Rc<RefCell<Vec<model::Track>>>,
+    tracks: Rc<RefCell<playlist_buffer::PlaylistBuffer>>,
     loaded: bool,
     next_offset: Option<u32>,
     _pagination_subscription: Subscription,
@@ -235,6 +244,10 @@ impl PlaylistPage {
         Self {
             previous: None,
             loaded_at: None,
+            viewport_request: None,
+            visible_range: 0..0,
+            request_offset: None,
+            play_on_load: false,
             backend,
             selected: None,
             tracks: Rc::default(),
@@ -242,7 +255,9 @@ impl PlaylistPage {
             next_offset: None,
             _pagination_subscription: cx.subscribe(
                 &track_list,
-                |this, _, _: &track_list::LoadMoreTracks, cx| this.load_more(cx),
+                |this, _, range: &track_list::LoadMoreTracks, cx| {
+                    this.request_visible(range.0.clone(), cx)
+                },
             ),
             error: None,
             request: None,
@@ -260,15 +275,23 @@ impl PlaylistPage {
     }
 
     /// Starts the page's contents from the top, if there is anything to play.
-    pub(super) fn play(&mut self, tracks: &Rc<RefCell<Vec<model::Track>>>, cx: &mut Context<Self>) {
-        if tracks.borrow().is_empty() {
-            return;
-        }
-        let tracks = tracks.borrow().clone();
-        if let Some(playlist) = self.selected.clone() {
+    pub(super) fn play(
+        &mut self,
+        _: &Rc<RefCell<playlist_buffer::PlaylistBuffer>>,
+        cx: &mut Context<Self>,
+    ) {
+        let playback = self.tracks.borrow().first_playback();
+        if let (Some((tracks, index, next)), Some(playlist)) = (playback, self.selected.clone()) {
             self.player.update(cx, |player, cx| {
-                player.play_playlist(playlist, tracks, 0, self.next_offset, cx)
+                player.play_playlist(playlist, tracks, index, next, cx)
             });
+        } else {
+            let missing = self.tracks.borrow().missing_start();
+            if let (Some(playlist), Some(offset)) = (self.selected.clone(), missing) {
+                self.play_on_load = true;
+                self.viewport_request = None;
+                self.fetch_page(playlist, offset, cx);
+            }
         }
     }
 
@@ -282,12 +305,18 @@ impl PlaylistPage {
         {
             return;
         }
+        self.viewport_request = None;
+        self.request_offset = None;
+        self.visible_range = 0..0;
+        self.play_on_load = false;
         let previous = self.previous.take();
         self.previous = self
             .selected
             .clone()
             .filter(|_| {
-                self.loaded && self.error.is_none() && can_retain_tracks(&self.tracks.borrow())
+                self.loaded
+                    && self.error.is_none()
+                    && can_retain_iter(self.tracks.borrow().tracks())
             })
             .zip(self.loaded_at)
             .map(|(playlist, loaded_at)| PlaylistSnapshot {
@@ -322,7 +351,9 @@ impl PlaylistPage {
         }
         self.loaded_at = None;
         self.selected = Some(playlist.clone());
-        self.tracks = Rc::default();
+        self.tracks = Rc::new(RefCell::new(playlist_buffer::PlaylistBuffer::new(
+            playlist.track_count as usize,
+        )));
         self.track_list.update(cx, |list, cx| list.clear(cx));
         self.loaded = false;
         self.error = None;
@@ -332,16 +363,44 @@ impl PlaylistPage {
         cx.notify();
     }
 
-    fn load_more(&mut self, cx: &mut Context<Self>) {
-        if self.request.is_some() {
+    fn request_visible(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.visible_range = range.clone();
+        if self.play_on_load || self.error.is_some() {
             return;
         }
-        if let (Some(playlist), Some(offset)) = (self.selected.clone(), self.next_offset) {
-            self.fetch_page(playlist, offset, cx);
+        let missing = self.tracks.borrow_mut().missing_offset(range);
+        self.viewport_request = None;
+        let Some(offset) = missing else {
+            return;
+        };
+        if self.request_offset == Some(offset) {
+            return;
         }
+        self.viewport_request = Some(cx.spawn(async move |page, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(100))
+                .await;
+            let _ = page.update(cx, |page, cx| {
+                page.viewport_request = None;
+                let missing = page
+                    .tracks
+                    .borrow_mut()
+                    .missing_offset(page.visible_range.clone());
+                if let (Some(playlist), Some(offset)) = (page.selected.clone(), missing) {
+                    page.error = None;
+                    page.fetch_page(playlist, offset, cx);
+                }
+            });
+        }));
+    }
+
+    fn load_more(&mut self, cx: &mut Context<Self>) {
+        self.request_visible(self.visible_range.clone(), cx);
     }
 
     fn fetch_page(&mut self, playlist: model::Playlist, offset: u32, cx: &mut Context<Self>) {
+        self.request = None;
+        self.request_offset = Some(offset);
         let source_id = playlist.source_id.clone();
         let reply = request(&self.backend, move |respond| BackendCommand::LoadPlaylist {
             playlist,
@@ -358,27 +417,56 @@ impl PlaylistPage {
                 {
                     return;
                 }
+                if page.request_offset != Some(offset) {
+                    return;
+                }
                 page.request = None;
+                page.request_offset = None;
                 page.loaded = true;
+                let mut play_start = None;
                 match result {
                     Ok(result) => {
+                        if !result.tracks.is_empty() {
+                            play_start =
+                                Some(result.source_offsets.first().copied().unwrap_or(offset)
+                                    as usize);
+                        }
                         page.loaded_at = Some(SystemTime::now());
                         page.next_offset = result.next_offset;
                         if let Some(playlist) = page.selected.as_mut() {
                             playlist.track_count = result.total;
                         }
-                        page.tracks.borrow_mut().extend(result.tracks);
+                        page.tracks.borrow_mut().insert(offset, result);
                         page.error = None;
                         cx.emit(PageEvent::Loaded);
                     }
                     Err(error) => {
+                        page.play_on_load = false;
                         page.error = Some(error.clone());
                         cx.emit(PageEvent::Failed(error));
                     }
                 }
-                let empty = page.tracks.borrow().is_empty();
-                if empty && page.error.is_none() && page.next_offset.is_some() {
-                    page.load_more(cx);
+                if page.error.is_none() {
+                    if page.play_on_load {
+                        if let (Some(index), Some(playlist)) = (play_start, page.selected.clone()) {
+                            let playback = page.tracks.borrow().playback(index);
+                            if let Some((tracks, index, next)) = playback {
+                                page.play_on_load = false;
+                                page.player.update(cx, |player, cx| {
+                                    player.play_playlist(playlist, tracks, index, next, cx)
+                                });
+                            }
+                        } else if let (Some(playlist), Some(next)) =
+                            (page.selected.clone(), page.next_offset)
+                        {
+                            page.fetch_page(playlist, next, cx);
+                            cx.notify();
+                            return;
+                        } else {
+                            page.play_on_load = false;
+                        }
+                    }
+                    page.request_visible(page.visible_range.clone(), cx);
                 }
                 cx.notify();
             });
@@ -387,6 +475,10 @@ impl PlaylistPage {
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        self.viewport_request = None;
+        self.request_offset = None;
+        self.play_on_load = false;
+        self.visible_range = 0..0;
         self.previous = None;
         self.loaded_at = None;
         self.request = None;
@@ -582,12 +674,17 @@ impl ArtistPage {
         }
         let start = (index - 2) * columns;
         let end = (start + columns).min(self.albums.len());
-        let mut cards = div().h_64().w_full().flex().items_start().gap_3();
+        let mut cards = div()
+            .h(tokens::ALBUM_CARD_HEIGHT + Rems(0.5))
+            .w_full()
+            .flex()
+            .items_start()
+            .gap_2();
         for album_index in start..end {
             cards = cards.child(self.album_card(&self.albums[album_index], album_index, cx));
         }
         for _ in end..start + columns {
-            cards = cards.child(div().flex_1().min_w_0());
+            cards = cards.child(div().w(tokens::ALBUM_CARD_ARTWORK.size + Rems(1.)));
         }
         cards.into_any_element()
     }
@@ -603,10 +700,11 @@ impl ArtistPage {
 
         components::button(palette, ("artist-album", index))
             .test_support()
-            .flex_1()
+            .w(tokens::ALBUM_CARD_ARTWORK.size + Rems(1.))
+            .flex_none()
             .min_w_0()
             .h(tokens::ALBUM_CARD_HEIGHT)
-            .p_2p5()
+            .p_2()
             .flex_col()
             .items_center()
             .justify_start()
@@ -886,19 +984,18 @@ impl Render for SearchPage {
                                             components::button(palette, ("search-artist", index))
                                                 .test_support()
                                                 .hover(|style| style.bg(rgb(palette.control)))
-                                                .test_support()
-                                                .h_16()
+                                                .h_20()
                                                 .flex_1()
                                                 .min_w_0()
-                                                .px_3()
-                                                .gap_3()
+                                                .px_2()
+                                                .gap_2()
                                                 .rounded_lg()
                                                 .justify_start()
                                                 .child(components::artwork(
                                                     palette,
                                                     &cache,
                                                     artist.artwork_url.as_deref(),
-                                                    tokens::SIDEBAR_PLAYLIST_ARTWORK,
+                                                    tokens::SEARCH_ARTIST_ARTWORK,
                                                     CadenceIcon::Person,
                                                 ))
                                                 .child(
@@ -962,8 +1059,7 @@ impl Render for SearchPage {
 }
 
 impl Render for PlaylistPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = appearance::Appearance::palette(cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tracks = self.tracks.clone();
         let loaded = self.loaded;
         let empty = tracks.borrow().is_empty();
@@ -989,6 +1085,9 @@ impl Render for PlaylistPage {
             .selected
             .as_ref()
             .and_then(|playlist| playlist.artwork_url.clone());
+        let palette = collection_palette(artwork_url.as_deref(), &self.image_cache, window, cx);
+        self.track_list
+            .update(cx, |list, cx| list.set_palette(palette, cx));
         let list = if let Some(error) = self.error.as_deref().filter(|_| empty) {
             components::empty_state(palette, format!("Unable to load playlist: {error}"))
                 .into_any_element()
@@ -1031,6 +1130,8 @@ impl Render for PlaylistPage {
         let playback_tracks = tracks;
 
         components::page("playlist-page")
+            .bg(rgb(palette.canvas))
+            .text_color(rgb(palette.text))
             .pt_2()
             .child(
                 page_header()
@@ -1063,6 +1164,7 @@ impl Render for PlaylistPage {
                                     .mt_2()
                                     .child(
                                         components::pill(palette, "playlist-play", "Play", true)
+                                            .test_support()
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.play(&playback_tracks, cx);
                                             })),
@@ -1135,7 +1237,7 @@ impl Render for ArtistPage {
             components::empty_state(palette, format!("Unable to load artist: {error}"))
                 .into_any_element()
         } else if !self.loaded {
-            components::empty_state(palette, "Loading artist…").into_any_element()
+            components::list_skeleton(palette).into_any_element()
         } else {
             let layout = (tracks.len(), self.albums.len(), columns, window.rem_size());
             if self.content_layout != Some(layout) {
@@ -1240,8 +1342,7 @@ impl Render for ArtistPage {
 }
 
 impl Render for AlbumPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = appearance::Appearance::palette(cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let name = self
             .album
             .as_ref()
@@ -1257,6 +1358,9 @@ impl Render for AlbumPage {
                     .as_ref()
                     .and_then(|album| album.artwork_url.clone())
             });
+        let palette = collection_palette(artwork_url.as_deref(), &self.image_cache, window, cx);
+        self.track_list
+            .update(cx, |list, cx| list.set_palette(palette, cx));
         let detail = self.album.as_ref().map_or_else(
             || "Spotify album".to_owned(),
             |album| {
@@ -1299,6 +1403,8 @@ impl Render for AlbumPage {
         let playback_tracks = tracks;
 
         components::page("album-page")
+            .bg(rgb(palette.canvas))
+            .text_color(rgb(palette.text))
             .pt_2()
             .child(
                 page_header()
@@ -1327,6 +1433,23 @@ impl Render for AlbumPage {
                     ),
             )
             .child(list)
+    }
+}
+
+fn collection_palette(
+    url: Option<&str>,
+    cache: &Entity<image_cache::BoundedImageCache>,
+    window: &mut Window,
+    cx: &mut App,
+) -> CadencePalette {
+    let background = url
+        .and_then(|url| cache.update(cx, |cache, cx| cache.artwork_tint(url, window, cx)))
+        .unwrap_or(ARTIST_BACKGROUND);
+    CadencePalette {
+        canvas: background,
+        surface: background,
+        text_muted: 0xB8B4AF,
+        ..CadencePalette::DARK
     }
 }
 

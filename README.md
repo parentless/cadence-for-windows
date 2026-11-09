@@ -13,7 +13,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black.svg" alt="MIT license"></a>
 </p>
 
-![Cadence showing the Liked Songs library](assets/cadence.webp)
+![Cadence showing glaive’s artist profile](assets/glaive-profile.webp)
+
+Artist-page preview using public [glaive](https://open.spotify.com/artist/4cJKDGSv4Dz9QycXYmo565) metadata and artwork from Spotify.
 
 This is an open-source Windows-focused fork of
 [infomiho/cadence](https://github.com/infomiho/cadence). The original MIT license
@@ -50,8 +52,8 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Add tracks to the front of the upcoming queue without interrupting playback
 - Clear artwork from Settings; the shared cache automatically removes older images at its memory budget
 - See a brief red update indicator beside your account when a new release is available
-- Open playlists in 15-entry pages; fetch more near the scroll end
-- Restore loaded tracks and scroll position for two recent albums and two recent playlists; each inactive page is limited to 1,024 tracks and an estimated 2 MiB of track metadata
+- Jump through full playlist scrollbars; load visible 15-item pages after a 100 ms debounce and retain at most eight pages
+- Remember recent album and playlist views, including scroll position; retain one inactive page of each kind with metadata limits alongside the eight-page playlist cache
 - Shuffle loaded upcoming tracks without fetching whole playlists; explicitly queued tracks still play next
 - Double-click tracks to play; right-click for the same actions across every track list
 - Choose Graphite, Blue, Green, Purple, or Rose selection fills in Settings
@@ -62,6 +64,14 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Light, dark, and system appearances
 - Optional pixel-art player mascot
 - Persistent playback and library state
+
+## Reported memory use
+
+![User-reported Windows RAM ranges: Cadence 50–70 MB, Spotify 400–700 MB; not a controlled benchmark](assets/memory-comparison.png)
+
+These are user-reported example ranges, not an independent benchmark. Actual
+usage depends on workload, cache state, and process accounting. See
+[the source values, limits, and comparison method](docs/PERFORMANCE.md).
 
 ## Built With
 

@@ -50,7 +50,7 @@ pub(super) const SIDEBAR_TOP_INSET: Rems = Rems(2.5);
 pub(super) const SIDEBAR_TOP_INSET: Rems = Rems(0.75);
 
 pub(super) const PLAYLIST_ROW_HEIGHT: Rems = Rems(4.75);
-pub(super) const ALBUM_CARD_HEIGHT: Rems = Rems(15.25);
+pub(super) const ALBUM_CARD_HEIGHT: Rems = Rems(14.);
 pub(super) const QUEUE_DRAWER_WIDTH: Rems = Rems(26.25);
 
 pub(super) const ONBOARDING_MIN_HEIGHT: Rems = Rems(40.);
@@ -96,4 +96,9 @@ pub(super) const COLLECTION_ARTWORK: ArtworkSize = ArtworkSize {
 pub(super) const SIDEBAR_PLAYLIST_ARTWORK: ArtworkSize = ArtworkSize {
     size: Rems(1.75),
     radius: Rems(0.375),
+};
+
+pub(super) const SEARCH_ARTIST_ARTWORK: ArtworkSize = ArtworkSize {
+    size: Rems(4.),
+    radius: Rems(0.75),
 };
