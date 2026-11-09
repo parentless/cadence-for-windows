@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.9",
+    "cadence": "0.8.10",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "eb3ca1d2fc4559a46fa4914ddfeaf5ebd4537150",
-    "lockfile_sha256": "4ca52c091c49ed51af96d8794dc4d8682d4528bfca3d132f2e8f862085739699"
+    "revision": "5eae83eb3bd6974425c2c96c8c737c4b00261b68",
+    "lockfile_sha256": "fe57975ff434e17e79653261713da951e06dfa2d857a1a1601084a2e7169ec67"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42578985079",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42652407460",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,20 +57,20 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.9",
+      "cadence": "0.8.10",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "eb3ca1d2fc4559a46fa4914ddfeaf5ebd4537150",
-      "lockfile_sha256": "4ca52c091c49ed51af96d8794dc4d8682d4528bfca3d132f2e8f862085739699"
+      "revision": "5eae83eb3bd6974425c2c96c8c737c4b00261b68",
+      "lockfile_sha256": "fe57975ff434e17e79653261713da951e06dfa2d857a1a1601084a2e7169ec67"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42578985079"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42652407460"
   },
   "reviewed_changes": [
-    "Artist header, Popular tracks and virtualized discography share one scroll viewport; wheel input over the portrait scrolls the page",
-    "A single artist identity docks between search and account, with a bounded 180 ms settling period, continuous reversal and reduced-motion support",
-    "The backdrop reaches the exact page fill before the header bottom; native pixel assertions cover the seamless edge",
-    "Compact layouts reserve a smaller identity slot and hide the search shortcut hint while preserving the keyboard shortcut",
-    "Four new docked-artist references cover both appearances and window widths; settings references show version 0.8.9",
-    "All 136 captures repeat exactly on macOS 15; unrelated existing references remain pixel-identical"
+    "All shared track rows expose artist and album navigation using loaded references; individual collaborators remain separate links and partial legacy credits retain their original text",
+    "Track scrollbars occupy a permanent 16-point gutter outside the rows; headers share the same inset and durations do not shift or overlap the thumb",
+    "Pinned playlists form a stable prefix; recency promotion and its existing bounded animation operate only within the unpinned suffix",
+    "Pin ordering is cached across unchanged snapshots, per-row pin detection is constant-time, and navigation/favorite metadata is copied only on activation with stable track identity guards",
+    "Eight new references cover artist/album links and active unpinned playlists beneath pins with a hovered scrollbar, in both appearances and widths",
+    "All 144 captures repeat exactly on macOS 15; the approved scrolling artist header and seamless backdrop fade remain intact"
   ]
 }
