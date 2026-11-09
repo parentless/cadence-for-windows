@@ -162,6 +162,7 @@ impl Toolbar {
             )
             .child(
                 div()
+                    .when(self.route == Route::Artist && compact, |hint| hint.hidden())
                     .px_1p5()
                     .py_0p5()
                     .rounded_md()
@@ -301,6 +302,7 @@ impl Render for Toolbar {
             .as_ref()
             .and_then(|profile| profile.artwork_url.as_deref());
         let showing_settings = self.route == Route::Settings;
+        let artist_dock_width = Rems(if compact { 7.5 } else { 10.5 });
 
         div()
             .h(tokens::TOOLBAR_HEIGHT)
@@ -352,7 +354,7 @@ impl Render for Toolbar {
                 div()
                     .relative()
                     .when(self.route == Route::Artist, |anchor| {
-                        anchor.ml(Rems(13.75)).flex_none()
+                        anchor.ml(artist_dock_width + Rems(3.25)).flex_none()
                     })
                     .when(self.route == Route::Artist, |anchor| {
                         anchor.child(
@@ -360,7 +362,7 @@ impl Render for Toolbar {
                                 .absolute()
                                 .right(Rems(3.25))
                                 .top(Rems(0.25))
-                                .w(Rems(10.5))
+                                .w(artist_dock_width)
                                 .h(Rems(2.))
                                 .child(
                                     gpui_kit::canvas(
