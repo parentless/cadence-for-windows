@@ -1027,6 +1027,68 @@ fn pinned_playlists_stay_above_recent_items_and_keep_their_order() {
 }
 
 #[test]
+fn discrete_wheel_preserves_distance_and_precise_scrolling_stays_direct() {
+    fn run(smooth: bool, precise: bool) -> f32 {
+        let mut fixture = Fixture::new(false);
+        fixture.update(|_, cx| {
+            cx.set_reduce_motion(!smooth);
+            services::AppServices::library(cx).update(cx, |library, cx| {
+                library.handle_backend_event(
+                    BackendEvent::LibraryLoaded {
+                        generation: 0,
+                        liked_tracks: (0..200).map(track).collect(),
+                        playlists: vec![],
+                    },
+                    0,
+                    cx,
+                );
+            });
+        });
+        let before =
+            fixture.update(|window, _| window.find(("spotify-track", 2usize)).bounds().top());
+        fixture.update(|window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position: window.find("track-scroll-viewport").bounds().center(),
+                    delta: if precise {
+                        gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-60.)))
+                    } else {
+                        gpui_kit::ScrollDelta::Lines(point(0., -3.))
+                    },
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        if smooth && !precise {
+            std::thread::sleep(Duration::from_millis(16));
+            fixture.update(|window, cx| {
+                window.simulate_next_frame(cx);
+            });
+            std::thread::sleep(Duration::from_millis(85));
+            fixture.update(|window, cx| {
+                window.simulate_next_frame(cx);
+            });
+        }
+        let after =
+            fixture.update(|window, _| window.find(("spotify-track", 2usize)).bounds().top());
+        (before - after).into()
+    }
+    let native = run(false, false);
+    let smooth = run(true, false);
+    assert!(native > 0.);
+    assert!(
+        (native - smooth).abs() < 1.,
+        "smoothing must preserve wheel travel: {native} vs {smooth}"
+    );
+    assert!(
+        (run(true, true) - 60.).abs() < 1.,
+        "pixel input must scroll immediately"
+    );
+}
+
+#[test]
 fn scrollbar_gutter_keeps_duration_columns_stable_on_hover_and_drag() {
     for (width, zoom) in [(1280., 100), (900., 125)] {
         let mut fixture = Fixture::at_width(width);
@@ -1736,14 +1798,24 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
             cx,
         );
     });
+    fixture.update(|_, cx| {
+        appearance::Appearance::set_ui_zoom(crate::storage::UiZoom::from_percent(110).unwrap(), cx)
+            .unwrap();
+    });
+    fixture.update(|window, _| {
+        assert!(
+            window.find("artist-portrait").bounds().size.width
+                < gpui_kit::Rems(3.).to_pixels(window.rem_size()),
+            "zoom must preserve the scrolled page instead of resetting to its header"
+        );
+    });
     let visible_album = fixture.update(|window, cx| {
         let top = crate::app::tokens::TOOLBAR_HEIGHT.to_pixels(window.rem_size());
         let portrait = window.find("artist-portrait").bounds();
         let search = window.find("search-field").bounds();
         let account = window.find("account").bounds();
-        assert_eq!(
-            portrait.size.width,
-            gpui_kit::Rems(2.).to_pixels(window.rem_size())
+        assert!(
+            (portrait.size.width - gpui_kit::Rems(2.).to_pixels(window.rem_size())).abs() < px(1.)
         );
         assert!(portrait.left() >= search.right());
         assert!(window.find("artist-moving-name").bounds().right() <= account.left());

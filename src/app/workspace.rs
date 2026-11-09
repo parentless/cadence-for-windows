@@ -29,6 +29,8 @@ pub(super) struct Workspace {
     pub(super) player_bar: Entity<player_bar::PlayerBar>,
     pub(super) queue_drawer: Entity<player_bar::QueueDrawer>,
     pub(super) focus_handle: FocusHandle,
+    wheel_scroll: Rc<std::cell::RefCell<smooth_scroll::WheelScroll>>,
+    wheel_route: Option<Route>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -235,6 +237,8 @@ impl Workspace {
             player_bar,
             queue_drawer,
             focus_handle,
+            wheel_scroll: Rc::default(),
+            wheel_route: None,
             _subscriptions: subscriptions,
         }
     }
@@ -389,6 +393,10 @@ impl Render for Workspace {
         });
 
         let overlay_toolbar = route == Route::Artist;
+        if self.wheel_route != Some(route) {
+            smooth_scroll::cancel(&self.wheel_scroll);
+            self.wheel_route = Some(route);
+        }
 
         div()
             .id("cadence-root")
@@ -424,6 +432,7 @@ impl Render for Workspace {
             .bg(rgb(palette.canvas))
             .font_family("Inter")
             .text_color(rgb(palette.text))
+            .child(smooth_scroll::input(self.wheel_scroll.clone()))
             .child(
                 div()
                     .relative()

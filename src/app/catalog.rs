@@ -604,7 +604,6 @@ impl ArtistPage {
                             page.artist = Some(artist);
                             page.tracks = tracks.into();
                             page.albums = albums.into();
-                            page.content_layout = None;
                             page.loaded = true;
                             page.error = None;
                             page.loaded_at = Some(SystemTime::now());
@@ -1335,14 +1334,31 @@ impl Render for ArtistPage {
             self.loaded && self.error.is_none(),
         );
         if self.content_layout != Some(layout) {
-            self.content_state
-                .reset(if self.loaded && self.error.is_none() {
-                    3 + self.albums.len().div_ceil(columns)
-                } else {
-                    2
-                });
+            let count = if layout.4 {
+                3 + self.albums.len().div_ceil(columns)
+            } else {
+                2
+            };
+            if let Some(old) = self.content_layout.filter(|old| old.4 && layout.4) {
+                // Resizing, zooming or refreshing a loaded page must not reset
+                // to its header. Anchor the same release when columns change.
+                let mut anchor = self.content_state.logical_scroll_top();
+                if anchor.item_ix >= 3 {
+                    anchor.item_ix = 3 + (anchor.item_ix - 3) * old.2 / columns;
+                }
+                anchor.item_ix = anchor.item_ix.min(count.saturating_sub(1));
+                anchor.offset_in_item = anchor.offset_in_item / old.3 * layout.3;
+                let previous_count = self.content_state.item_count();
+                if previous_count != count {
+                    self.content_state.splice(3..previous_count, count - 3);
+                }
+                self.content_state.remeasure();
+                self.content_state.scroll_to(anchor);
+            } else {
+                self.content_state.reset(count);
+                self.header_motion.update(cx, |header, cx| header.reset(cx));
+            }
             self.content_layout = Some(layout);
-            self.header_motion.update(cx, |header, cx| header.reset(cx));
         }
         let source_id = self
             .reference
@@ -1389,20 +1405,26 @@ impl Render for ArtistPage {
                                 let page = cx.weak_entity();
                                 let self_header = self.header_motion.clone();
                                 move |bounds, window, cx| {
-                                    let header = self_header.clone();
                                     let origin = bounds.origin;
                                     let width = bounds.size.width;
-                                    cx.defer(move |cx| {
-                                        header.update(cx, |header, cx| {
-                                            if header.origin != origin
-                                                || header.viewport_width != width
-                                            {
-                                                header.origin = origin;
-                                                header.viewport_width = width;
-                                                cx.notify();
-                                            }
+                                    let geometry_changed = {
+                                        let header = self_header.read(cx);
+                                        header.origin != origin || header.viewport_width != width
+                                    };
+                                    if geometry_changed {
+                                        let header = self_header.clone();
+                                        cx.defer(move |cx| {
+                                            header.update(cx, |header, cx| {
+                                                if header.origin != origin
+                                                    || header.viewport_width != width
+                                                {
+                                                    header.origin = origin;
+                                                    header.viewport_width = width;
+                                                    cx.notify();
+                                                }
+                                            });
                                         });
-                                    });
+                                    }
                                     let gap = Rems(0.5).to_pixels(window.rem_size());
                                     let stride = (tokens::ALBUM_CARD_ARTWORK.size + Rems(1.5))
                                         .to_pixels(window.rem_size());

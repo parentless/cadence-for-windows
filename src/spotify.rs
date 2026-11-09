@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use futures::TryStreamExt;
@@ -248,6 +251,12 @@ fn classify_client_error(error: &rspotify::ClientError) -> ErrorKind {
     }
 }
 
+fn top_tracks_access_denied(error: &rspotify::ClientError) -> bool {
+    matches!(error, rspotify::ClientError::Http(error)
+        if matches!(error.as_ref(), rspotify::http::HttpError::StatusCode(response)
+            if matches!(response.status().as_u16(), 403 | 404)))
+}
+
 fn convert_saved_track(saved: SavedTrack) -> Result<Option<Track>> {
     if saved.track.is_local || saved.track.id.is_none() {
         return Ok(None);
@@ -265,6 +274,7 @@ pub struct Spotify {
     client: AuthCodePkceSpotify,
     refresh_lock: Arc<tokio::sync::Mutex<()>>,
     gate: Arc<RateLimitGate>,
+    top_tracks_unavailable: Arc<AtomicBool>,
 }
 
 impl Spotify {
@@ -303,6 +313,7 @@ impl Spotify {
             client,
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
             gate: Arc::new(RateLimitGate::default()),
+            top_tracks_unavailable: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -633,8 +644,41 @@ impl Spotify {
         if artist.artwork_url.is_none() {
             artist.artwork_url = albums.iter().find_map(|album| album.artwork_url.clone());
         }
+        let tracks = self.artist_popular_tracks(artist_id, &artist).await?;
+        Ok((artist, tracks, albums))
+    }
+
+    async fn artist_popular_tracks(&self, id: ArtistId<'_>, artist: &Artist) -> Result<Vec<Track>> {
+        if !self.top_tracks_unavailable.load(Ordering::Relaxed) {
+            // Still available to eligible older/extended-quota applications.
+            // New Development Mode applications receive 403/404: probe once
+            // per session, then reuse the existing search fallback without
+            // repeatedly spending requests on a forbidden endpoint.
+            #[allow(deprecated)]
+            let result = self.client.artist_top_tracks(id.as_ref(), None).await;
+            match result {
+                Ok(tracks) => {
+                    return tracks
+                        .into_iter()
+                        .map(convert_track)
+                        .filter_map(|track| match track {
+                            Ok(track) if track.is_displayable() => Some(Ok(track)),
+                            Ok(_) => None,
+                            Err(error) => Some(Err(error)),
+                        })
+                        .collect();
+                }
+                Err(error) if top_tracks_access_denied(&error) => {
+                    self.top_tracks_unavailable.store(true, Ordering::Relaxed);
+                    log::info!(
+                        "Spotify top tracks unavailable for this application; using artist search"
+                    );
+                }
+                Err(error) => return Err(error).context("could not load Spotify popular tracks"),
+            }
+        }
         let query = format!("artist:\"{}\"", artist.name.replace('"', ""));
-        let tracks = self
+        Ok(self
             .search_tracks(&query)
             .await?
             .into_iter()
@@ -642,10 +686,9 @@ impl Spotify {
                 track
                     .artists
                     .iter()
-                    .any(|candidate| candidate.source_id.as_deref() == Some(source_id))
+                    .any(|candidate| candidate.source_id.as_deref() == Some(id.id()))
             })
-            .collect();
-        Ok((artist, tracks, albums))
+            .collect())
     }
 
     pub async fn album(&self, source_id: &str) -> Result<(Album, Vec<Track>)> {
@@ -1019,6 +1062,7 @@ mod tests {
             client,
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
             gate: Arc::new(RateLimitGate::default()),
+            top_tracks_unavailable: Arc::new(AtomicBool::new(false)),
         };
         let id = "7a3LWj5xSFhFRYmztS8wgK";
         let error = spotify.set_track_liked(id, true).await.unwrap_err();
@@ -1060,6 +1104,141 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    async fn test_client(address: std::net::SocketAddr) -> super::Spotify {
+        use super::*;
+        let client = AuthCodePkceSpotify::with_config(
+            Credentials::new_pkce("test"),
+            OAuth::default(),
+            Config {
+                api_base_url: format!("http://{address}/v1/"),
+                token_refreshing: false,
+                ..Default::default()
+            },
+        );
+        *client.token.lock().await.unwrap() = Some(Token {
+            access_token: "test-token".into(),
+            expires_at: Some("2050-01-01T00:00:00Z".parse().unwrap()),
+            ..Default::default()
+        });
+        Spotify {
+            client,
+            refresh_lock: Arc::default(),
+            gate: Arc::default(),
+            top_tracks_unavailable: Arc::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn popular_uses_spotify_ranking_and_does_not_search_when_available() {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let spotify = test_client(listener.local_addr().unwrap()).await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..count])
+                    .starts_with("GET /v1/artists/artist/top-tracks")
+            );
+            let track = |id: &str| {
+                serde_json::json!({
+                    "album": {"album_type":"album", "artists":[], "external_urls":{}, "href":null,
+                        "id":"album", "images":[], "name":"Album", "release_date":"2026", "release_date_precision":"year", "type":"album"},
+                    "artists":[{"external_urls":{}, "href":null, "id":"artist", "name":"Artist", "type":"artist"}], "disc_number":1, "duration_ms":120000, "explicit":false,
+                    "external_ids":{}, "external_urls":{}, "href":null, "id":id, "is_local":false,
+                    "name":id, "preview_url":null, "track_number":1, "type":"track"
+                })
+            };
+            let body =
+                serde_json::json!({"tracks":[track("0000000000000000000002"), track("0000000000000000000001")]})
+                    .to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let artist = Artist {
+            provider: Provider::Spotify,
+            source_id: "artist".into(),
+            name: "Artist".into(),
+            spotify_uri: None,
+            artwork_url: None,
+        };
+        let tracks = timeout(
+            Duration::from_secs(3),
+            spotify.artist_popular_tracks(ArtistId::from_id("artist").unwrap(), &artist),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            tracks
+                .iter()
+                .map(|track| track.source_id.as_str())
+                .collect::<Vec<_>>(),
+            ["0000000000000000000002", "0000000000000000000001"]
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn forbidden_popular_endpoint_is_probed_once_across_clones() {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let spotify = test_client(listener.local_addr().unwrap()).await;
+        let server = tokio::spawn(async move {
+            for index in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let count = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                let (status, body) = if index == 0 {
+                    assert!(request.starts_with("GET /v1/artists/artist/top-tracks"));
+                    ("403 Forbidden", "{}")
+                } else {
+                    assert!(request.starts_with("GET /v1/search?"));
+                    (
+                        "200 OK",
+                        r#"{"tracks":{"href":"","items":[],"limit":10,"next":null,"offset":0,"previous":null,"total":0}}"#,
+                    )
+                };
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let artist = Artist {
+            provider: Provider::Spotify,
+            source_id: "artist".into(),
+            name: "Artist".into(),
+            spotify_uri: None,
+            artwork_url: None,
+        };
+        timeout(Duration::from_secs(3), async {
+            for client in [spotify.clone(), spotify] {
+                assert!(
+                    client
+                        .artist_popular_tracks(ArtistId::from_id("artist").unwrap(), &artist)
+                        .await
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn popular_fallback_does_not_hide_auth_throttling_or_server_errors() {
+        for status in [401, 403, 404, 429, 503] {
+            let error = status_error(status, None);
+            assert_eq!(
+                super::top_tracks_access_denied(error.downcast_ref().unwrap()),
+                matches!(status, 403 | 404)
+            );
+        }
     }
 
     fn status_error(status: u16, retry_after: Option<&str>) -> anyhow::Error {

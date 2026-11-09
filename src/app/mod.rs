@@ -391,6 +391,7 @@ mod services;
 mod session;
 mod settings;
 mod sidebar;
+mod smooth_scroll;
 mod tokens;
 mod track_list;
 mod track_row;

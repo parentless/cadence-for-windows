@@ -91,6 +91,7 @@ pub(super) struct TrackRow {
     palette: CadencePalette,
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
+    dense: bool,
     current: bool,
     playing: bool,
     on_toggle_playback: Option<RowCallback>,
@@ -119,6 +120,7 @@ impl TrackRow {
             palette,
             image_cache,
             compact: false,
+            dense: false,
             current: false,
             playing: false,
             on_toggle_playback: None,
@@ -146,6 +148,11 @@ impl TrackRow {
 
     pub(super) fn compact(mut self, compact: bool) -> Self {
         self.compact = compact;
+        self
+    }
+
+    pub(super) fn dense(mut self, dense: bool) -> Self {
+        self.dense = dense;
         self
     }
 
@@ -360,7 +367,7 @@ impl RenderOnce for TrackRow {
         let row = components::row_button(palette, ("spotify-track", index))
             .test_support()
             .w_full()
-            .h_16()
+            .h(if self.dense { Rems(3.25) } else { Rems(3.75) })
             .px_3()
             .rounded_lg()
             .justify_start()
@@ -525,7 +532,7 @@ impl RenderOnce for TrackRow {
                     }
                 })
             });
-        if let Some(transition) = self.hover_transition.filter(|_| !self.current) {
+        let row = if let Some(transition) = self.hover_transition.filter(|_| !self.current) {
             transition.apply(
                 row,
                 window,
@@ -535,7 +542,14 @@ impl RenderOnce for TrackRow {
             )
         } else {
             row.into_any_element()
-        }
+        };
+        // Permanent spacing, including at rest: hover cannot move any rows.
+        div()
+            .w_full()
+            .flex_none()
+            .py(Rems(0.125))
+            .child(row)
+            .into_any_element()
     }
 }
 

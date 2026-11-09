@@ -20,7 +20,7 @@ pub(super) struct TrackList {
     shown_playlist_len: usize,
     /// The row whose action menu is open, keyed by source ID and row index so
     /// the same track appearing twice opens only the row that was clicked.
-    menu_open: Option<String>,
+    menu_open: Option<(Rc<str>, usize)>,
     inline_rows: bool,
     queue_mode: bool,
     hide_header: bool,
@@ -215,14 +215,17 @@ impl TrackList {
         let palette = appearance::Appearance::palette(cx);
         let is_current_track = self.player.read(cx).is_current_track(&track);
         let favorite = self.library.read(cx).is_favorite(&track);
-        let menu_key = format!("{}:{index}", track.source_id);
-        let menu_open = self.menu_open.as_deref() == Some(menu_key.as_str());
+        let menu_open = self
+            .menu_open
+            .as_ref()
+            .is_some_and(|(id, row)| id.as_ref() == track.source_id && *row == index);
         let menu = menu_open
             .then(|| self.action_menu(&track, index, favorite, is_current_track, cx))
             .map(IntoElement::into_any_element);
         // Share one small identity across callbacks, rather than a full Track.
         // Input from a stale frame must never act on a different replacement row.
         let source_id: Rc<str> = Rc::from(track.source_id.as_str());
+        let menu_source_id = source_id.clone();
         let provider = track.provider;
         let can_navigate = track
             .artists
@@ -234,6 +237,7 @@ impl TrackList {
                 .is_some_and(|album| album.source_id.is_some());
         track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
             .compact(compact)
+            .dense(self.inline_rows)
             .when(can_navigate, |row| {
                 let source_id = source_id.clone();
                 row.navigation(cx.listener(
@@ -287,7 +291,7 @@ impl TrackList {
             .context_menu(
                 self.menu_position,
                 cx.listener(move |this, event: &gpui_kit::MouseDownEvent, _, cx| {
-                    this.menu_open = Some(menu_key.clone());
+                    this.menu_open = Some((menu_source_id.clone(), index));
                     this.menu_position = Some(event.position);
                     cx.notify();
                 }),

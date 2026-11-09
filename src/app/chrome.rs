@@ -369,7 +369,9 @@ impl Render for Toolbar {
                                         {
                                             let header = self.artist_header.clone();
                                             move |bounds, _, cx| {
-                                                if let Some(header) = &header {
+                                                if let Some(header) = &header
+                                                    && header.read(cx).target_bounds != Some(bounds)
+                                                {
                                                     let header = header.clone();
                                                     cx.defer(move |cx| {
                                                         header.update(cx, |header, cx| {
