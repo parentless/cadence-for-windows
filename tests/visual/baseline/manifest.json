@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.8",
+    "cadence": "0.8.9",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "b30294cac5731db95be4683870f453eb7c18642c",
-    "lockfile_sha256": "bb66b864fe28395ab34e5f6717c2d28396c6c729e3b4a0a7311654782f2aa912"
+    "revision": "eb3ca1d2fc4559a46fa4914ddfeaf5ebd4537150",
+    "lockfile_sha256": "4ca52c091c49ed51af96d8794dc4d8682d4528bfca3d132f2e8f862085739699"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42572051041",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42578985079",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,20 +57,20 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.8",
+      "cadence": "0.8.9",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "b30294cac5731db95be4683870f453eb7c18642c",
-      "lockfile_sha256": "bb66b864fe28395ab34e5f6717c2d28396c6c729e3b4a0a7311654782f2aa912"
+      "revision": "eb3ca1d2fc4559a46fa4914ddfeaf5ebd4537150",
+      "lockfile_sha256": "4ca52c091c49ed51af96d8794dc4d8682d4528bfca3d132f2e8f862085739699"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42572051041"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42578985079"
   },
   "reviewed_changes": [
-    "Taller artist header and matching album/playlist padding; the artist backdrop fills the header and fades to the shared search-page background",
-    "Remove image-colour extraction and collection tints; preserve correct light-theme selected-row contrast",
-    "Discography columns follow actual available content width, including sidebar transitions and zoom, without a four-column cap",
-    "Remove the separate hover fill on in-row play/pause controls",
-    "Four new references cover the shared track menu with Spotify Like/Unlike actions in both themes and widths",
-    "All 132 CI captures repeat exactly; production and the capture harness register the same embedded Inter font files and weights"
+    "Artist header, Popular tracks and virtualized discography share one scroll viewport; wheel input over the portrait scrolls the page",
+    "A single artist identity docks between search and account, with a bounded 180 ms settling period, continuous reversal and reduced-motion support",
+    "The backdrop reaches the exact page fill before the header bottom; native pixel assertions cover the seamless edge",
+    "Compact layouts reserve a smaller identity slot and hide the search shortcut hint while preserving the keyboard shortcut",
+    "Four new docked-artist references cover both appearances and window widths; settings references show version 0.8.9",
+    "All 136 captures repeat exactly on macOS 15; unrelated existing references remain pixel-identical"
   ]
 }
