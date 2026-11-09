@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.7",
+    "cadence": "0.8.8",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "70bb5f5f02147bc453ce4c5a36dc58b1a80fa7ae",
-    "lockfile_sha256": "8bbb1d3e0a74c6c030ba9bcec620b87863a6d0c6c6efc0636195ffadfe828ee0"
+    "revision": "b30294cac5731db95be4683870f453eb7c18642c",
+    "lockfile_sha256": "bb66b864fe28395ab34e5f6717c2d28396c6c729e3b4a0a7311654782f2aa912"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42541313413",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42572051041",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,20 +57,20 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.7",
+      "cadence": "0.8.8",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "70bb5f5f02147bc453ce4c5a36dc58b1a80fa7ae",
-      "lockfile_sha256": "8bbb1d3e0a74c6c030ba9bcec620b87863a6d0c6c6efc0636195ffadfe828ee0"
+      "revision": "b30294cac5731db95be4683870f453eb7c18642c",
+      "lockfile_sha256": "bb66b864fe28395ab34e5f6717c2d28396c6c729e3b4a0a7311654782f2aa912"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42541313413"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42572051041"
   },
   "reviewed_changes": [
-    "Transparent track headers with larger text, separator-free rows and rounded selection darker than hover",
-    "Larger artist search cards, static artist-loading skeletons and tightly spaced fixed-width discography cards",
-    "Dark dominant-cover collection backgrounds and full-height sparse playlist scrolling",
-    "Sixteen additional references cover artist loading, album tint, playlist tail and selected-versus-hover rows",
-    "All 128 captures repeat exactly and match the previous candidate capture; 32 existing settings, setup, entered-search and keyboard-focus references remain pixel-identical",
-    "Zoomed compact discography bounds and bounded viewport requests are additionally checked by state/render tests"
+    "Taller artist header and matching album/playlist padding; the artist backdrop fills the header and fades to the shared search-page background",
+    "Remove image-colour extraction and collection tints; preserve correct light-theme selected-row contrast",
+    "Discography columns follow actual available content width, including sidebar transitions and zoom, without a four-column cap",
+    "Remove the separate hover fill on in-row play/pause controls",
+    "Four new references cover the shared track menu with Spotify Like/Unlike actions in both themes and widths",
+    "All 132 CI captures repeat exactly; production and the capture harness register the same embedded Inter font files and weights"
   ]
 }
