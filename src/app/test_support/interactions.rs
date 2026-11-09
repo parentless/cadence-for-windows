@@ -1219,6 +1219,43 @@ fn escape_cancels_the_sign_in_app_change_wherever_keyboard_focus_is() {
 }
 
 #[test]
+fn empty_artist_still_has_both_sections_after_skeleton_loading() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.open_artist(
+                artist_ref("Empty artist", "empty-artist"),
+                Route::LikedSongs,
+                cx,
+            );
+        })
+    });
+    let BackendCommand::LoadArtist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("artist request")
+    };
+    respond
+        .send(Ok((
+            model::Artist {
+                provider: model::Provider::Spotify,
+                source_id: "empty-artist".into(),
+                spotify_uri: None,
+                name: "Empty artist".into(),
+                artwork_url: None,
+            },
+            vec![],
+            vec![],
+        )))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, _| {
+        assert!(window.try_find("artist-popular-heading").is_some());
+        assert!(window.try_find("artist-discography-heading").is_some());
+    });
+}
+
+#[test]
 fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
     let mut fixture = Fixture::new(false);
     let workspace = fixture.workspace.clone().unwrap();

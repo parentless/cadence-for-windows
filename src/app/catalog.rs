@@ -503,7 +503,7 @@ pub(super) struct ArtistPage {
     tracks: Arc<[model::Track]>,
     albums: Arc<[model::Album]>,
     content_state: gpui_kit::ListState,
-    content_layout: Option<(usize, usize, usize, Pixels)>,
+    content_layout: Option<(usize, usize, usize, Pixels, bool)>,
     content_columns: usize,
     pub(super) header_motion: Entity<artist_header::ArtistHeader>,
     loaded: bool,
@@ -1332,6 +1332,7 @@ impl Render for ArtistPage {
             self.albums.len(),
             columns,
             window.rem_size(),
+            self.loaded && self.error.is_none(),
         );
         if self.content_layout != Some(layout) {
             self.content_state
