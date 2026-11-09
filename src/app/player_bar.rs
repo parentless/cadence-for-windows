@@ -276,7 +276,6 @@ impl PlayerBar {
         let player = self.player.read(cx);
         let now_playing = player.now_playing().cloned();
         let playing = player.playing();
-        let loading = player.loading();
         let shuffle = player.shuffle();
         let position_ms = player.position_ms(cx.background_executor().now());
         let volume = player.volume();
@@ -420,26 +419,20 @@ impl PlayerBar {
                             )
                             .child(
                                 components::filled_button(palette, "play-toggle")
+                                    .aria_label(if playing { "Pause" } else { "Play" })
                                     .hover(|style| style.opacity(0.9))
                                     .size_10()
                                     .rounded_full()
                                     .bg(rgb(palette.text_primary))
-                                    .child(if loading {
-                                        Spinner::new()
-                                            .color(rgb(palette.on_accent).into())
-                                            .into_any_element()
-                                    } else {
-                                        components::icon(
-                                            if playing {
-                                                CadenceIcon::Pause
-                                            } else {
-                                                CadenceIcon::Play
-                                            },
-                                            tokens::PLAYBACK_ICON,
-                                            palette.on_accent,
-                                        )
-                                        .into_any_element()
-                                    })
+                                    .child(components::icon(
+                                        if playing {
+                                            CadenceIcon::Pause
+                                        } else {
+                                            CadenceIcon::Play
+                                        },
+                                        tokens::PLAYBACK_ICON,
+                                        palette.on_accent,
+                                    ))
                                     .test_support()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.player.update(cx, |player, cx| player.toggle(cx));

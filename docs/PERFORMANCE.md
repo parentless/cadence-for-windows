@@ -69,3 +69,26 @@ Spotify's [February 2026 changes](https://developer.spotify.com/documentation/we
 removed top tracks for new Development Mode apps, so the fallback cannot promise
 the same ranking as Spotify's own client. No private scraping endpoint or
 continuous popularity polling is added.
+
+
+# Cached suggestions and artwork polish (0.8.12)
+
+Search autocomplete waits 120 ms after typing and returns at most six
+identity references into loaded favorites, recent history and liked songs.
+One cancellable task shares the existing library arrays temporarily; matching
+runs on the background executor, and no full-text index, persistent suggestion
+cache, artwork request or Spotify request is added. Query matching is limited
+to 96 characters and eight words. ASCII matches scan borrowed bytes; Unicode
+case folding uses temporary strings. A new query replaces the prior task.
+Escape, submission, route changes and outside clicks dismiss suggestions.
+Playback resolves and validates the original track identity against current
+library data, cloning full metadata only after activation. Enter without a
+selected suggestion continues to perform the explicit Spotify search.
+
+Album track rows omit their image elements entirely, avoiding repeated artwork
+lookups. The large album cover has two static box shadows, not a blurred duplicate
+image or animated effect. The artist fade uses the same existing gradient and
+solid seam layers in a smaller area near Popular; no new image processing pass
+is added. Pending playback keeps a static play/pause icon rather than running a
+spinner. These changes add small, bounded suggestion state and transient search
+work during typing; they do not establish a measured zero-cost CPU/GPU claim.

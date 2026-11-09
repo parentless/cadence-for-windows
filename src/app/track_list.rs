@@ -238,6 +238,7 @@ impl TrackList {
         track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
             .compact(compact)
             .dense(self.inline_rows)
+            .hide_artwork(self.current_album_id.is_some())
             .when(can_navigate, |row| {
                 let source_id = source_id.clone();
                 row.navigation(cx.listener(

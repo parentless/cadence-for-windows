@@ -66,6 +66,7 @@ impl Player {
         self.playing
     }
 
+    #[cfg(test)]
     pub(super) fn loading(&self) -> bool {
         self.loading
     }

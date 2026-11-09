@@ -1282,11 +1282,19 @@ impl ArtistPage {
             .overflow_hidden()
             .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
             .child(div().absolute().inset_0().bg(gpui_kit::rgba(0x10101455)))
-            .child(div().absolute().inset_0().bg(gpui_kit::linear_gradient(
-                180.,
-                gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.05), 0.),
-                gpui_kit::linear_color_stop(rgb(palette.surface), 0.82),
-            )))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(relative(0.28))
+                    .bg(gpui_kit::linear_gradient(
+                        180.,
+                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.), 0.),
+                        gpui_kit::linear_color_stop(rgb(palette.surface), 0.88),
+                    )),
+            )
             // Finish on the exact page fill (also avoids GPU interpolation rounding at the seam).
             .child(
                 div()
@@ -1294,7 +1302,7 @@ impl ArtistPage {
                     .left_0()
                     .right_0()
                     .bottom_0()
-                    .h(relative(0.15))
+                    .h(relative(0.03))
                     .bg(rgb(palette.surface)),
             )
             .child(
@@ -1521,13 +1529,32 @@ impl Render for AlbumPage {
             .pt(DETAIL_HEADER_PADDING)
             .child(
                 page_header()
-                    .child(components::artwork(
-                        palette,
-                        &self.image_cache,
-                        artwork_url.as_deref(),
-                        tokens::COLLECTION_ARTWORK,
-                        CadenceIcon::MusicNote,
-                    ))
+                    .child(
+                        div()
+                            .flex_none()
+                            .rounded(Rems(1.75))
+                            .shadow(vec![
+                                gpui_kit::BoxShadow::new(
+                                    px(0.),
+                                    px(10.),
+                                    gpui_kit::rgba(0x00000055).into(),
+                                )
+                                .blur_radius(px(24.)),
+                                gpui_kit::BoxShadow::new(
+                                    px(0.),
+                                    px(2.),
+                                    gpui_kit::rgba(0x00000033).into(),
+                                )
+                                .blur_radius(px(6.)),
+                            ])
+                            .child(components::artwork(
+                                palette,
+                                &self.image_cache,
+                                artwork_url.as_deref(),
+                                tokens::COLLECTION_ARTWORK,
+                                CadenceIcon::MusicNote,
+                            )),
+                    )
                     .child(
                         div()
                             .flex()

@@ -16,6 +16,12 @@ pub(super) enum ToolbarEvent {
 /// The bar above the page: search on the left, account on the right.
 pub(super) struct Toolbar {
     search_input: Entity<InputState>,
+    suggestions: Vec<cached_search::Match>,
+    suggestion_query: String,
+    suggestion_selection: Option<usize>,
+    suggestion_task: Option<gpui_kit::Task<()>>,
+    search_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    library: Entity<library::Library>,
     pub(super) artist_header: Option<Entity<artist_header::ArtistHeader>>,
     menu_open: bool,
     session: Entity<session::Session>,
@@ -39,12 +45,20 @@ impl Toolbar {
         let search_subscription = cx.subscribe_in(
             &search_input,
             window,
-            |_, input, event: &InputEvent, _, cx| match event {
+            |this, input, event: &InputEvent, _, cx| match event {
                 InputEvent::Change => {
                     let query = input.read(cx).value().to_string();
+                    this.queue_suggestions(&query, cx);
                     cx.emit(ToolbarEvent::QueryChanged(query));
                 }
-                InputEvent::PressEnter { .. } => cx.emit(ToolbarEvent::SubmitSearch),
+                InputEvent::PressEnter { .. } => {
+                    if let Some(index) = this.suggestion_selection {
+                        this.play_suggestion(index, cx);
+                    } else {
+                        this.dismiss_suggestions(cx);
+                        cx.emit(ToolbarEvent::SubmitSearch);
+                    }
+                }
                 _ => {}
             },
         );
@@ -70,6 +84,12 @@ impl Toolbar {
             update_version,
             update_generation: 0,
             search_input,
+            suggestions: Vec::new(),
+            suggestion_query: String::new(),
+            suggestion_selection: None,
+            suggestion_task: None,
+            search_bounds: Rc::default(),
+            library: services::AppServices::library(cx),
             artist_header: None,
             menu_open: false,
             session: services::AppServices::session(cx),
@@ -88,6 +108,22 @@ impl Toolbar {
         cx.notify();
     }
 
+    #[cfg(test)]
+    pub(super) fn seed_cached_suggestions(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_suggestions(cx);
+        let library = self.library.read(cx);
+        self.suggestions = cached_search::find(
+            "Song",
+            &[
+                library.favorites().clone(),
+                library.recently_played().clone(),
+                library.liked_tracks().clone(),
+            ],
+        );
+        self.suggestion_selection = Some(1);
+        cx.notify();
+    }
+
     /// Pushes the workspace state the toolbar reflects but does not own.
     pub(super) fn show(
         &mut self,
@@ -97,6 +133,9 @@ impl Toolbar {
         cx: &mut Context<Self>,
     ) {
         if self.route != route || self.back_target != back_target || self.error != error {
+            if self.route != route {
+                self.dismiss_suggestions(cx);
+            }
             self.route = route;
             self.back_target = back_target;
             self.error = error;
@@ -120,12 +159,161 @@ impl Toolbar {
         }
     }
 
-    fn search_field(
+    pub(super) fn close_suggestions(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = !self.suggestions.is_empty() || self.suggestion_task.is_some();
+        self.dismiss_suggestions(cx);
+        open
+    }
+
+    fn dismiss_suggestions(&mut self, cx: &mut Context<Self>) {
+        self.suggestion_task = None;
+        self.suggestion_selection = None;
+        if !self.suggestions.is_empty() {
+            self.suggestions.clear();
+            cx.notify();
+        }
+    }
+
+    fn queue_suggestions(&mut self, query: &str, cx: &mut Context<Self>) {
+        self.dismiss_suggestions(cx);
+        self.suggestion_query = query.trim().chars().take(96).collect();
+        if self.suggestion_query.chars().count() < 2 {
+            return;
+        }
+        let query = self.suggestion_query.clone();
+        self.suggestion_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let Ok(sources) = this.update(cx, |toolbar, cx| {
+                let library = toolbar.library.read(cx);
+                [
+                    library.favorites().clone(),
+                    library.recently_played().clone(),
+                    library.liked_tracks().clone(),
+                ]
+            }) else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { cached_search::find(&query, &sources) })
+                .await;
+            let _ = this.update(cx, |toolbar, cx| {
+                toolbar.suggestion_task = None;
+                toolbar.suggestions = result;
+                cx.notify();
+            });
+        }));
+    }
+
+    fn play_suggestion(&mut self, index: usize, cx: &mut Context<Self>) {
+        let found = self.suggestions.get(index).cloned();
+        self.play_cached(found.as_ref(), cx);
+    }
+
+    fn play_cached(&mut self, found: Option<&cached_search::Match>, cx: &mut Context<Self>) {
+        let track = found
+            .and_then(|found| found.resolve(self.library.read(cx)))
+            .cloned();
+        self.dismiss_suggestions(cx);
+        if let Some(track) = track {
+            self.player.update(cx, |player, cx| {
+                player.play_context(vec![track], 0, cx);
+            });
+        }
+    }
+
+    fn suggestion_menu(
         &self,
+        palette: CadencePalette,
+        width: Rems,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let library = self.library.read(cx);
+        let mut menu = components::menu_surface(palette)
+            .id("cached-search-suggestions")
+            .test_support()
+            .absolute()
+            .top_12()
+            .left_0()
+            .w(width)
+            .child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child("From your library"),
+            );
+        for (index, found) in self.suggestions.iter().enumerate() {
+            let Some(track) = found.resolve(library) else {
+                continue;
+            };
+            let found = found.clone();
+            menu = menu.child(
+                components::button(palette, ("cached-search-track", index))
+                    .test_support()
+                    .w_full()
+                    .h_12()
+                    .px_3()
+                    .gap_2()
+                    .rounded_lg()
+                    .justify_start()
+                    .when(self.suggestion_selection == Some(index), |row| {
+                        row.bg(rgb(palette.selection))
+                    })
+                    .hover(|style| style.bg(rgb(palette.surface_hover)))
+                    .child(components::icon(
+                        CadenceIcon::MusicNote,
+                        tokens::CONTROL_ICON,
+                        palette.text_muted,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_sm()
+                                    .text_color(rgb(palette.text_primary))
+                                    .child(track.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(rgb(palette.text_muted))
+                                    .child(track.artist.clone()),
+                            ),
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.play_cached(Some(&found), cx)),
+                    ),
+            );
+        }
+        menu.on_mouse_down_out(
+            cx.listener(|this, event: &gpui_kit::MouseDownEvent, _, cx| {
+                if !this
+                    .search_bounds
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&event.position))
+                {
+                    this.dismiss_suggestions(cx);
+                }
+            }),
+        )
+    }
+
+    fn search_field(
+        &mut self,
         palette: CadencePalette,
         compact: bool,
         window: &Window,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let width = if self.route == Route::Artist {
             Rems(if compact { 13. } else { 23. })
@@ -137,6 +325,32 @@ impl Toolbar {
         components::glass_search_frame(palette, &self.search_input, window, cx)
             .id("search-field")
             .test_support()
+            .relative()
+            .capture_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
+                if this.suggestions.is_empty() {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "down" => {
+                        this.suggestion_selection = Some(
+                            this.suggestion_selection
+                                .map_or(0, |i| (i + 1) % this.suggestions.len()),
+                        );
+                    }
+                    "up" => {
+                        this.suggestion_selection = Some(
+                            this.suggestion_selection
+                                .map_or(this.suggestions.len() - 1, |i| {
+                                    (i + this.suggestions.len() - 1) % this.suggestions.len()
+                                }),
+                        );
+                    }
+                    "escape" => this.dismiss_suggestions(cx),
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
             .w(width)
             .min_w_0()
             .h_10()
@@ -176,6 +390,20 @@ impl Toolbar {
                         "Ctrl K"
                     }),
             )
+            .child(
+                gpui_kit::canvas(
+                    {
+                        let bounds = self.search_bounds.clone();
+                        move |rect, _, _| bounds.set(Some(rect))
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .when(!self.suggestions.is_empty(), |field| {
+                field.child(deferred(self.suggestion_menu(palette, width, cx)))
+            })
     }
 
     /// The line under the account name: the newest failure if there is one,

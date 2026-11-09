@@ -307,6 +307,167 @@ impl Fixture {
     }
 }
 
+fn cached_search_fixture() -> Fixture {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: (0..30).map(track).collect(),
+                    playlists: vec![],
+                },
+                0,
+                cx,
+            );
+        });
+        window.click("search-input", cx);
+    });
+    fixture
+}
+
+#[test]
+fn cached_search_debounces_without_network_and_supports_keyboard_playback() {
+    let mut fixture = cached_search_fixture();
+    fixture.update(|window, cx| window.input("Song", cx));
+    fixture.update(|window, _| assert!(window.try_find("cached-search-suggestions").is_none()));
+    fixture.cx.advance_clock(Duration::from_millis(130));
+    fixture.wait_for(|window, _| window.try_find("cached-search-suggestions").is_some());
+    fixture.no_commands();
+    fixture.update(|window, _| {
+        for i in 0usize..6 {
+            assert!(window.try_find(("cached-search-track", i)).is_some());
+        }
+        assert!(window.try_find(("cached-search-track", 6usize)).is_none());
+    });
+    fixture.update(|window, cx| {
+        window.press("down", cx);
+        window.press("enter", cx);
+    });
+    let BackendCommand::PlayContext { tracks, index } =
+        fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected cached track playback")
+    };
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(index, 0);
+    assert_eq!(tracks[0].source_id, track(0).source_id);
+    fixture.update(|window, cx| {
+        assert!(window.try_find("cached-search-suggestions").is_none());
+        assert!(services::AppServices::player(cx).read(cx).loading());
+    });
+    fixture.no_commands();
+}
+
+#[test]
+fn cached_suggestions_click_and_escape_dismissal_work() {
+    let mut fixture = cached_search_fixture();
+    fixture.update(|window, cx| window.input("Song", cx));
+    fixture.cx.advance_clock(Duration::from_millis(130));
+    fixture.wait_for(|window, _| window.try_find("cached-search-suggestions").is_some());
+    fixture.update(|window, cx| window.click(("cached-search-track", 1usize), cx));
+    let BackendCommand::PlayContext { tracks, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("expected cached playback")
+    };
+    assert_eq!(tracks[0].source_id, track(1).source_id);
+    fixture.update(|window, cx| {
+        window.click("search-input", cx);
+        window.input(" 2", cx);
+    });
+    fixture.cx.advance_clock(Duration::from_millis(130));
+    fixture.wait_for(|window, _| window.try_find("cached-search-suggestions").is_some());
+    fixture.update(|window, cx| window.press("escape", cx));
+    fixture.update(|window, _| assert!(window.try_find("cached-search-suggestions").is_none()));
+    fixture.no_commands();
+}
+
+#[test]
+fn cached_suggestions_reject_replaced_library_rows_and_close_outside() {
+    let mut fixture = cached_search_fixture();
+    fixture.update(|window, cx| window.input("Song", cx));
+    fixture.cx.advance_clock(Duration::from_millis(130));
+    fixture.wait_for(|window, _| window.try_find("cached-search-suggestions").is_some());
+    fixture.update(|window, cx| {
+        let position = window
+            .find(("cached-search-track", 0usize))
+            .bounds()
+            .center();
+        window.dispatch_event(
+            MouseDownEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.clear(cx);
+            library.handle_backend_event(
+                BackendEvent::LocalStateLoaded {
+                    favorites: vec![],
+                    pinned_playlists: vec![],
+                    recently_played: vec![],
+                },
+                0,
+                cx,
+            );
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: vec![track(99)],
+                    playlists: vec![],
+                },
+                0,
+                cx,
+            );
+        });
+        window.dispatch_event(
+            MouseUpEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    if let Ok(command) = fixture.backend.commands.try_recv() {
+        panic!("unexpected stale click command: {command:?}");
+    }
+    fixture.update(|window, cx| {
+        window.click("search-input", cx);
+        window.input(" ", cx);
+    });
+    fixture.cx.advance_clock(Duration::from_millis(130));
+    fixture.wait_for(|window, _| window.try_find("cached-search-suggestions").is_some());
+    fixture.update(|window, cx| window.click("nav-favorites", cx));
+    fixture.update(|window, _| assert!(window.try_find("cached-search-suggestions").is_none()));
+}
+
+#[test]
+fn cached_suggestions_cancel_pending_work_when_query_is_cleared() {
+    let mut fixture = cached_search_fixture();
+    fixture.update(|window, cx| {
+        window.input("Song", cx);
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+            cx,
+        );
+        window.press("backspace", cx);
+    });
+    fixture.cx.advance_clock(Duration::from_millis(300));
+    fixture.update(|window, _| assert!(window.try_find("cached-search-suggestions").is_none()));
+    fixture.no_commands();
+}
+
 #[test]
 fn search_shortcut_focuses_input_and_enter_submits_text_without_toggling_playback() {
     let mut fixture = Fixture::new(false);
@@ -811,6 +972,10 @@ fn track_artist_links_work_inside_an_album_without_playing() {
         .unwrap();
     fixture.update(|_, _| {});
     fixture.update(|window, cx| {
+        assert!(
+            window.try_find(("track-artwork", 0usize)).is_none(),
+            "album rows must not construct redundant cover elements"
+        );
         window
             .within(("spotify-track", 0usize))
             .click(("track-artist", 1usize), cx)

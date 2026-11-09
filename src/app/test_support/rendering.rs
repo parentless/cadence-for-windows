@@ -34,6 +34,8 @@ enum Scene {
     Setup,
     SetupFilled,
     SearchEntered,
+    CachedSearch,
+    PlaybackPending,
     SearchArtists,
     ShuffleOn,
     PlaylistTooltip,
@@ -74,6 +76,8 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("setup", Scene::Setup),
         ("setup-filled", Scene::SetupFilled),
         ("search-entered", Scene::SearchEntered),
+        ("search-cached", Scene::CachedSearch),
+        ("playback-pending", Scene::PlaybackPending),
         ("search-artists", Scene::SearchArtists),
         ("shuffle-on", Scene::ShuffleOn),
         ("sidebar-tooltip", Scene::PlaylistTooltip),
@@ -148,6 +152,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     } else {
         820.
     };
+    let mut main_workspace = None;
     let handle = if matches!(scene, Scene::Setup | Scene::SetupFilled) {
         cx.update(|cx| {
             services::AppServices::session(cx).update(cx, |session, cx| {
@@ -165,6 +170,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         .expect("setup window")
     } else {
         let (handle, workspace) = workspace(&mut cx, width, height);
+        main_workspace = Some(workspace.clone());
         cx.update(|cx| {
             workspace.update(cx, |workspace, cx| match scene {
                 Scene::Artist | Scene::ArtistDiscography
@@ -312,6 +318,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                         }).collect(), tracks: (0..10).map(track).collect(), playlists: vec![],
                     })).unwrap();
                 }
+                Scene::PlaybackPending => { services::AppServices::player(cx).update(cx, |player, cx| player.set_loading(true, cx)); }
                 Scene::ShuffleOn => { services::AppServices::player(cx).update(cx, |player, cx| player.toggle_shuffle(cx)); }
                 Scene::UpdateAvailable => { workspace.toolbar.update(cx, |toolbar, cx| toolbar.seed_update_available(cx)); }
                 Scene::Settings | Scene::SettingsAutoplayOff | Scene::SettingsMenu | Scene::SettingsCache => {
@@ -508,7 +515,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             })
             .expect("artist menu is visible over backdrop");
         }
-        Scene::SearchEntered => {
+        Scene::SearchEntered | Scene::CachedSearch => {
             press_key(
                 &mut cx,
                 handle.into(),
@@ -518,8 +525,27 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     "ctrl-k"
                 },
             );
-            for character in "Blue Train".chars() {
+            for character in (if matches!(scene, Scene::CachedSearch) {
+                "Song"
+            } else {
+                "Blue Train"
+            })
+            .chars()
+            {
                 press_key(&mut cx, handle.into(), &character.to_string());
+            }
+            if matches!(scene, Scene::CachedSearch) {
+                cx.update(|cx| {
+                    main_workspace
+                        .as_ref()
+                        .unwrap()
+                        .update(cx, |workspace, cx| {
+                            workspace
+                                .toolbar
+                                .update(cx, |toolbar, cx| toolbar.seed_cached_suggestions(cx));
+                        });
+                });
+                settle(&mut cx, handle.into());
             }
         }
         Scene::QueueFocus { open } => {
@@ -733,6 +759,22 @@ pub(crate) fn run() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
+    if std::env::args().any(|argument| argument == "--catalog-polish-preview") {
+        let previews = artifacts.with_file_name("catalog-polish-previews");
+        std::fs::create_dir_all(&previews).expect("preview directory");
+        for (name, scene, width) in [
+            ("artist", Scene::ReadmeGlaive, 1280.),
+            ("album", Scene::AlbumTint, 1280.),
+            ("suggestions", Scene::CachedSearch, 1280.),
+            ("pending", Scene::PlaybackPending, 1280.),
+        ] {
+            let image = capture(scene, ThemePreference::Dark, width);
+            let repeated = capture(scene, ThemePreference::Dark, width);
+            assert!(compare(name, &image, &repeated, &previews));
+            save_artifact(&image, &previews.join(format!("{name}.png")));
+        }
+        return;
+    }
     if std::env::args().any(|argument| argument == "--navigation-preview") {
         let previews = artifacts.with_file_name("navigation-previews");
         std::fs::create_dir_all(&previews).unwrap();

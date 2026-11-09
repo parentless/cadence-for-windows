@@ -48,6 +48,12 @@ impl Workspace {
         if self.player_bar.update(cx, |bar, cx| bar.cancel_scrub(cx)) {
             return;
         }
+        if self
+            .toolbar
+            .update(cx, |toolbar, cx| toolbar.close_suggestions(cx))
+        {
+            return;
+        }
         if self.session.read(cx).app_change_confirmation_open() {
             self.cancel_spotify_app_change(cx);
         }

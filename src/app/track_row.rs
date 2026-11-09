@@ -92,6 +92,7 @@ pub(super) struct TrackRow {
     image_cache: Entity<image_cache::BoundedImageCache>,
     compact: bool,
     dense: bool,
+    hide_artwork: bool,
     current: bool,
     playing: bool,
     on_toggle_playback: Option<RowCallback>,
@@ -121,6 +122,7 @@ impl TrackRow {
             image_cache,
             compact: false,
             dense: false,
+            hide_artwork: false,
             current: false,
             playing: false,
             on_toggle_playback: None,
@@ -148,6 +150,11 @@ impl TrackRow {
 
     pub(super) fn compact(mut self, compact: bool) -> Self {
         self.compact = compact;
+        self
+    }
+
+    pub(super) fn hide_artwork(mut self, hide: bool) -> Self {
+        self.hide_artwork = hide;
         self
     }
 
@@ -346,24 +353,26 @@ impl RenderOnce for TrackRow {
         } else {
             album_text
         };
-        let artwork = components::artwork(
-            palette,
-            &self.image_cache,
-            self.track.artwork_url.as_deref(),
-            tokens::TRACK_ARTWORK,
-            CadenceIcon::MusicNote,
-        );
-        let artwork = if album.is_some() {
-            self.navigation_link(
-                ("track-artwork", index),
-                TrackNavigation::Album,
-                artwork,
-                window,
-                self.compact,
-            )
-        } else {
-            artwork
-        };
+        let artwork = (!self.hide_artwork).then(|| {
+            let artwork = components::artwork(
+                palette,
+                &self.image_cache,
+                self.track.artwork_url.as_deref(),
+                tokens::TRACK_ARTWORK,
+                CadenceIcon::MusicNote,
+            );
+            if album.is_some() {
+                self.navigation_link(
+                    ("track-artwork", index),
+                    TrackNavigation::Album,
+                    artwork,
+                    window,
+                    self.compact,
+                )
+            } else {
+                artwork
+            }
+        });
         let row = components::row_button(palette, ("spotify-track", index))
             .test_support()
             .w_full()
@@ -422,7 +431,7 @@ impl RenderOnce for TrackRow {
                     .flex()
                     .items_center()
                     .gap_2p5()
-                    .child(div().flex_none().child(artwork))
+                    .children(artwork.map(|artwork| div().flex_none().child(artwork)))
                     .child(
                         // Cross-axis stretch (the default) hands each line a
                         // definite width, which text layout needs to ellipsize
