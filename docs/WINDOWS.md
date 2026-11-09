@@ -207,7 +207,7 @@ files (current and previous). This bounds log disk usage without a restart.
 
 ### Spotify Liked Songs
 
-Right-click a track and choose **Add to Spotify Liked Songs** or **Remove from
+Right-click a track and choose **Add to Liked Songs** or **Remove from
 Spotify Liked Songs**. These actions change your Spotify account. Stars and
 Favorites remain local to Cadence. If you signed in before this feature was
 added, sign out through the account menu and sign in again once to approve

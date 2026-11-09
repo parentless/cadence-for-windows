@@ -405,11 +405,11 @@ impl TrackList {
             )
             .when(track.provider == model::Provider::Spotify, |menu| {
                 let label = if spotify_like_busy {
-                    "Spotify library is updating…"
+                    "Updating Spotify library…"
                 } else if spotify_liked {
-                    "Remove from Spotify Liked Songs"
+                    "Remove from Liked Songs"
                 } else {
-                    "Add to Spotify Liked Songs"
+                    "Add to Liked Songs"
                 };
                 if spotify_like_busy {
                     menu.child(components::disabled_text_menu_item(
