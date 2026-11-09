@@ -234,7 +234,6 @@ impl RenderOnce for TrackRow {
                                 .w_full()
                                 .h_8()
                                 .rounded_md()
-                                .hover(|style| style.bg(rgb(palette.control_hover)))
                                 .child(components::icon(
                                     if self.playing {
                                         CadenceIcon::Pause

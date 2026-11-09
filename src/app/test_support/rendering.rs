@@ -1,14 +1,15 @@
 use super::*;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy)]
 enum Scene {
     Artist,
     ArtistLoading,
+    ArtistDiscography,
     TrackHover,
+    TrackMenu,
     AlbumTint,
     PlaylistTail,
     ReadmeGlaive,
@@ -48,6 +49,7 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("artist", Scene::Artist),
         ("artist-loading", Scene::ArtistLoading),
         ("track-hover", Scene::TrackHover),
+        ("track-menu", Scene::TrackMenu),
         ("album-tint", Scene::AlbumTint),
         ("playlist-tail", Scene::PlaylistTail),
         ("artist-zoom-large", Scene::ArtistZoomLarge),
@@ -130,20 +132,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     );
     cx.update(|cx| {
         cx.set_reduce_motion(true);
-        cx.text_system()
-            .add_fonts(vec![
-                Cow::Borrowed(include_bytes!(
-                    "../../../tests/visual/fonts/Inter-Variable.ttf"
-                )),
-                Cow::Borrowed(include_bytes!(
-                    "../../../tests/visual/fonts/Inter-Medium.ttf"
-                )),
-                Cow::Borrowed(include_bytes!(
-                    "../../../tests/visual/fonts/Inter-SemiBold.ttf"
-                )),
-                Cow::Borrowed(include_bytes!("../../../tests/visual/fonts/Inter-Bold.ttf")),
-            ])
-            .expect("pinned Inter fonts");
+        fonts::register(cx).expect("bundled Inter fonts");
     });
     let mut backend = cx.update(|cx| initialize(cx, theme));
     let height = if matches!(scene, Scene::ReadmeGlaive) {
@@ -170,7 +159,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         let (handle, workspace) = workspace(&mut cx, width, height);
         cx.update(|cx| {
             workspace.update(cx, |workspace, cx| match scene {
-                Scene::Artist
+                Scene::Artist | Scene::ArtistDiscography
                 | Scene::ArtistMenu
                 | Scene::ArtistPortrait
                 | Scene::ArtistLandscape | Scene::ArtistZoomLarge => {
@@ -335,6 +324,45 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                         delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
                         modifiers: Default::default(),
                         touch_phase: gpui_kit::TouchPhase::Moved,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
+        Scene::ArtistDiscography => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                let position = window.find(("spotify-track", 0usize)).bounds().center();
+                window.dispatch_event(
+                    gpui_kit::ScrollWheelEvent {
+                        position,
+                        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-240.))),
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.hover("artist-header", cx)
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
+        Scene::TrackMenu => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                let position = window.find(("spotify-track", 1usize)).bounds().center();
+                window.dispatch_event(
+                    MouseDownEvent {
+                        button: MouseButton::Right,
+                        position,
+                        modifiers: Default::default(),
+                        click_count: 1,
+                        first_mouse: false,
                     }
                     .to_platform_input(),
                     cx,
@@ -509,13 +537,23 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             assert_eq!(bounds.size.width, Rems(10.).to_pixels(window.rem_size()));
             assert_eq!(bounds.size.height, Rems(10.).to_pixels(window.rem_size()));
             let popular = window.find("artist-popular-heading").bounds();
-            let discography = window.find("artist-discography-heading").bounds();
             let last_track = window.find(("spotify-track", 2usize)).bounds();
             assert!(popular.origin.y < last_track.origin.y);
-            assert!(discography.origin.y >= last_track.bottom());
-            assert!(
-                discography.origin.y - last_track.bottom() <= Rems(2.).to_pixels(window.rem_size())
-            );
+            if let Some(discography) = window.try_find("artist-discography-heading") {
+                let discography = discography.bounds();
+                assert!(discography.origin.y >= last_track.bottom());
+                assert!(
+                    discography.origin.y - last_track.bottom()
+                        <= Rems(2.).to_pixels(window.rem_size())
+                );
+            } else {
+                // At increased zoom the taller header pushes this virtualized
+                // section below the viewport; scrolling is tested separately.
+                assert!(
+                    last_track.bottom()
+                        >= window.viewport_size().height - Rems(6.).to_pixels(window.rem_size())
+                );
+            }
             let backdrop = window.find("artist-backdrop-image").bounds();
             let header = window.find("artist-header").bounds();
             assert_eq!(
@@ -601,6 +639,44 @@ pub(crate) fn run() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
+    if std::env::args().any(|argument| argument == "--detail-layout-preview") {
+        let previews = artifacts.with_file_name("detail-layout-previews");
+        std::fs::create_dir_all(&previews).expect("preview directory");
+        for (name, scene, width, theme) in [
+            (
+                "glaive-profile",
+                Scene::ReadmeGlaive,
+                1280.,
+                ThemePreference::Dark,
+            ),
+            (
+                "artist-wide",
+                Scene::ArtistDiscography,
+                1920.,
+                ThemePreference::Dark,
+            ),
+            ("artist-compact", Scene::Artist, 900., ThemePreference::Dark),
+            ("album", Scene::AlbumTint, 1280., ThemePreference::Dark),
+            (
+                "playlist",
+                Scene::PlaylistTracks,
+                1280.,
+                ThemePreference::Dark,
+            ),
+            ("artist-light", Scene::Artist, 1280., ThemePreference::Light),
+        ] {
+            let image = capture(scene, theme, width);
+            let repeated = capture(scene, theme, width);
+            assert!(
+                compare(name, &image, &repeated, &previews),
+                "preview must repeat exactly"
+            );
+            let path = previews.join(format!("{name}.png"));
+            save_artifact(&image, &path);
+            println!("{}", path.display());
+        }
+        return;
+    }
     if std::env::args().any(|argument| argument == "--readme-glaive") {
         let screenshot = capture(Scene::ReadmeGlaive, ThemePreference::Dark, 1280.);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/glaive-profile.png");

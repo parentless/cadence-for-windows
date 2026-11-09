@@ -288,11 +288,7 @@ impl Toolbar {
 
 impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = if self.route == Route::Artist {
-            CadencePalette::DARK
-        } else {
-            appearance::Appearance::palette(cx)
-        };
+        let palette = appearance::Appearance::palette(cx);
         let compact = is_compact_content_layout(window);
         let profile_name = self.profile_name(cx);
         let profile = self.session.read(cx).profile().cloned();

@@ -1267,15 +1267,29 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
         window.dispatch_event(
             gpui_kit::ScrollWheelEvent {
                 position,
-                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-700.))),
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-450.))),
                 ..Default::default()
             }
             .to_platform_input(),
             cx,
         );
     });
-    fixture.update(|window, cx| window.click(("artist-album", 4usize), cx));
-    assert_eq!(fixture.requested_album(), "album-4");
+    let visible_album = fixture.update(|window, cx| {
+        let top = window.find("artist-header").bounds().bottom();
+        let index = (0usize..40)
+            .find(|index| {
+                window
+                    .try_find(("artist-album", *index))
+                    .is_some_and(|card| {
+                        card.bounds().top() >= top
+                            && card.bounds().bottom() < window.viewport_size().height - px(100.)
+                    })
+            })
+            .expect("one complete discography card is visible after scrolling");
+        window.click(("artist-album", index), cx);
+        index
+    });
+    assert_eq!(fixture.requested_album(), format!("album-{visible_album}"));
     assert_eq!(fixture.route(), Route::Album);
 }
 
@@ -1402,6 +1416,19 @@ fn playlist_keeps_raw_offsets_for_unavailable_rows_and_retries_visible_pages() {
         .unwrap();
     fixture.update(|_, _| {});
     fixture.no_commands();
+    // The taller detail header leaves fewer rows initially visible.
+    fixture.update(|window, cx| {
+        let position = window.find(("spotify-track", 0usize)).bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-200.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
     fixture.update(|window, cx| window.double_click(("spotify-track", 5usize), cx));
     let BackendCommand::PlayPlaylistContext {
         index,
@@ -1418,7 +1445,7 @@ fn playlist_keeps_raw_offsets_for_unavailable_rows_and_retries_visible_pages() {
         window.dispatch_event(
             gpui_kit::ScrollWheelEvent {
                 position,
-                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-850.))),
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-650.))),
                 modifiers: Default::default(),
                 touch_phase: gpui_kit::TouchPhase::Moved,
             }
@@ -2132,79 +2159,222 @@ fn playlist_play_skips_unavailable_start_pages_without_loading_the_whole_list() 
 }
 
 #[test]
-fn discography_cards_stay_inside_a_narrow_zoomed_viewport() {
-    let mut fixture = Fixture::at_width(900.);
-    let workspace = fixture.workspace.clone().unwrap();
-    fixture.update(|_, cx| {
-        appearance::Appearance::set_ui_zoom(crate::storage::UiZoom::from_percent(125).unwrap(), cx)
-            .unwrap();
-        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
-            workspace.open_artist(
-                model::ArtistRef {
-                    name: "Artist".into(),
-                    source_id: Some("artist".into()),
-                    spotify_uri: None,
-                },
-                Route::LikedSongs,
+fn discography_cards_fit_the_available_width_at_narrow_and_wide_sizes() {
+    for (width, zoom, collapsed) in [(900., 125, false), (1920., 100, false), (1280., 100, true)] {
+        let mut fixture = Fixture::at_width(width);
+        let workspace = fixture.workspace.clone().unwrap();
+        fixture.update(|_, cx| {
+            appearance::Appearance::set_ui_zoom(
+                crate::storage::UiZoom::from_percent(zoom).unwrap(),
                 cx,
             )
+            .unwrap();
+            workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+                workspace
+                    .sidebar
+                    .update(cx, |sidebar, cx| sidebar.set_collapsed(collapsed, cx));
+                workspace.open_artist(
+                    model::ArtistRef {
+                        name: "Artist".into(),
+                        source_id: Some("artist".into()),
+                        spotify_uri: None,
+                    },
+                    Route::LikedSongs,
+                    cx,
+                )
+            });
+        });
+        let BackendCommand::LoadArtist { respond, .. } =
+            fixture.backend.commands.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        respond
+            .send(Ok((
+                model::Artist {
+                    provider: model::Provider::Spotify,
+                    name: "Artist".into(),
+                    source_id: "artist".into(),
+                    spotify_uri: None,
+                    artwork_url: None,
+                },
+                (0..3).map(track).collect(),
+                (0..20)
+                    .map(|i| model::Album {
+                        provider: model::Provider::Spotify,
+                        source_id: format!("album-{i}"),
+                        name: format!("Album {i}").into(),
+                        spotify_uri: None,
+                        artwork_url: None,
+                        artists: vec![],
+                        release_date: None,
+                        track_count: None,
+                    })
+                    .collect(),
+            )))
+            .unwrap();
+        fixture.update(|_, _| {});
+        fixture.cx.advance_clock(Duration::from_secs(1));
+        fixture.update(|_, _| {});
+        fixture.update(|window, cx| {
+            let position = window.find(("spotify-track", 1usize)).bounds().center();
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position,
+                    delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-600.))),
+                    modifiers: Default::default(),
+                    touch_phase: gpui_kit::TouchPhase::Moved,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        fixture.update(|window, _| {
+            let mut found = 0;
+            for index in 0usize..20 {
+                if let Some(card) = window.try_find(("artist-album", index)) {
+                    assert!(
+                        card.bounds().right()
+                            <= window.viewport_size().width
+                                - gpui_kit::Rems(2.).to_pixels(window.rem_size())
+                    );
+                    found += 1;
+                }
+            }
+            assert!(found >= 2);
+            if width > 1800. || collapsed {
+                let first = window.find(("artist-album", 0usize)).bounds();
+                let fifth = window
+                    .find(("artist-album", if collapsed { 5usize } else { 4usize }))
+                    .bounds();
+                assert_eq!(
+                    first.origin.y, fifth.origin.y,
+                    "wide layouts must exceed four columns"
+                );
+            }
+        });
+        fixture.no_commands();
+    }
+}
+
+#[test]
+fn spotify_likes_confirm_success_keep_favorites_separate_and_bound_pending_work() {
+    let mut fixture = Fixture::new(false);
+    fixture.right_click_track(1);
+    fixture.update(|window, cx| window.click(("track-menu-spotify-like", 1usize), cx));
+    let BackendCommand::SetSpotifyLiked {
+        track: sent,
+        liked,
+        respond,
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("Spotify write")
+    };
+    assert_eq!(sent, track(1));
+    assert!(!liked);
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            assert!(
+                library.is_spotify_liked(&track(1)),
+                "retain confirmed state while pending"
+            );
+            library.set_spotify_liked(track(2), false, cx);
+            library.revalidate(cx);
         });
     });
-    let BackendCommand::LoadArtist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    fixture.no_commands();
+    respond
+        .send(Err(anyhow::anyhow!(
+            "Sign in again to grant library editing permission"
+        )))
+        .unwrap();
+    fixture.update(|_, cx| {
+        assert!(
+            services::AppServices::library(cx)
+                .read(cx)
+                .is_spotify_liked(&track(1))
+        )
+    });
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        assert!(
+            workspace
+                .upgrade()
+                .unwrap()
+                .read(cx)
+                .action_notice
+                .is_some()
+        )
+    });
+    fixture.right_click_track(1);
+    fixture.update(|window, cx| window.click(("track-menu-spotify-like", 1usize), cx));
+    let BackendCommand::SetSpotifyLiked { respond, .. } =
+        fixture.backend.commands.try_recv().unwrap()
     else {
         panic!()
     };
-    respond
-        .send(Ok((
-            model::Artist {
-                provider: model::Provider::Spotify,
-                name: "Artist".into(),
-                source_id: "artist".into(),
-                spotify_uri: None,
-                artwork_url: None,
-            },
-            (0..3).map(track).collect(),
-            (0..20)
-                .map(|i| model::Album {
-                    provider: model::Provider::Spotify,
-                    source_id: format!("album-{i}"),
-                    name: format!("Album {i}").into(),
-                    spotify_uri: None,
-                    artwork_url: None,
-                    artists: vec![],
-                    release_date: None,
-                    track_count: None,
-                })
-                .collect(),
-        )))
-        .unwrap();
+    respond.send(Ok(())).unwrap();
     fixture.update(|_, _| {});
-    fixture.update(|window, cx| {
-        let position = window.find(("spotify-track", 1usize)).bounds().center();
-        window.dispatch_event(
-            gpui_kit::ScrollWheelEvent {
-                position,
-                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-600.))),
-                modifiers: Default::default(),
-                touch_phase: gpui_kit::TouchPhase::Moved,
-            }
-            .to_platform_input(),
-            cx,
+    fixture.update(|_, cx| {
+        let library = services::AppServices::library(cx);
+        let library = library.read(cx);
+        assert!(!library.is_spotify_liked(&track(1)));
+        assert!(library.is_favorite(&track(0)));
+        assert!(!library.is_favorite(&track(1)));
+    });
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.set_spotify_liked(track(1), true, cx)
+        })
+    });
+    let BackendCommand::SetSpotifyLiked { liked, respond, .. } =
+        fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    assert!(liked);
+    respond.send(Ok(())).unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|_, cx| {
+        let library = services::AppServices::library(cx);
+        assert_eq!(library.read(cx).liked_tracks()[0], track(1));
+        assert_eq!(
+            library
+                .read(cx)
+                .liked_tracks()
+                .iter()
+                .filter(|t| **t == track(1))
+                .count(),
+            1
         );
     });
-    fixture.update(|window, _| {
-        let mut found = 0;
-        for index in 0usize..20 {
-            if let Some(card) = window.try_find(("artist-album", index)) {
-                assert!(
-                    card.bounds().right()
-                        <= window.viewport_size().width
-                            - gpui_kit::Rems(2.).to_pixels(window.rem_size())
-                );
-                found += 1;
-            }
-        }
-        assert!(found >= 2);
+    fixture.no_commands();
+}
+
+#[test]
+fn signing_out_discards_a_pending_spotify_like_reply() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.set_spotify_liked(track(9), true, cx)
+        })
+    });
+    let BackendCommand::SetSpotifyLiked { respond, .. } =
+        fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| library.clear(cx))
+    });
+    let _ = respond.send(Ok(()));
+    fixture.update(|_, cx| {
+        assert!(
+            services::AppServices::library(cx)
+                .read(cx)
+                .liked_tracks()
+                .is_empty()
+        )
     });
     fixture.no_commands();
 }

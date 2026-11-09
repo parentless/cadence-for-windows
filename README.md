@@ -55,6 +55,8 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 - Jump through full playlist scrollbars; load visible 15-item pages after a 100 ms debounce and retain at most eight pages
 - Remember recent album and playlist views, including scroll position; retain one inactive page of each kind with metadata limits alongside the eight-page playlist cache
 - Shuffle loaded upcoming tracks without fetching whole playlists; explicitly queued tracks still play next
+- Add or remove Spotify Liked Songs through the shared right-click menu; existing users sign out and back in once to grant library-edit permission
+- Bundled Inter fonts provide the same family and weights on Windows and macOS
 - Double-click tracks to play; right-click for the same actions across every track list
 - Choose Graphite, Blue, Green, Purple, or Rose selection fills in Settings
 - Scale the UI from 75% to 125% with saved zoom presets

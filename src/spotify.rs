@@ -7,8 +7,8 @@ use keyring::Entry;
 use rspotify::{
     AuthCodePkceSpotify, Config, Credentials, OAuth, Token,
     model::{
-        AlbumId, AlbumType, ArtistId, FullAlbum, FullArtist, FullTrack, Id, Image, Market,
-        PlayableItem, PlaylistId, SavedTrack, SearchResult, SearchType, SimplifiedAlbum,
+        AlbumId, AlbumType, ArtistId, FullAlbum, FullArtist, FullTrack, Id, Image, LibraryId,
+        Market, PlayableItem, PlaylistId, SavedTrack, SearchResult, SearchType, SimplifiedAlbum,
         SimplifiedArtist, SimplifiedPlaylist, SimplifiedTrack, TrackId,
     },
     prelude::{BaseClient, OAuthClient},
@@ -275,6 +275,7 @@ impl Spotify {
             scopes: scopes!(
                 "streaming",
                 "user-library-read",
+                "user-library-modify",
                 "playlist-read-private",
                 "playlist-read-collaborative",
                 "user-read-private"
@@ -451,6 +452,26 @@ impl Spotify {
             }
         })
         .await
+    }
+
+    /// A click-driven, idempotent library write behind the existing token and
+    /// rate-limit gate. Older sessions need consent for this additional scope.
+    pub async fn set_track_liked(&self, source_id: &str, liked: bool) -> Result<()> {
+        let id = TrackId::from_id(source_id)?;
+        self.gated(async {
+            let authorized = self.client.token.lock().await
+                .map_err(|_| anyhow!("could not lock Spotify token state"))?
+                .as_ref().is_some_and(|token| token.scopes.contains("user-library-modify"));
+            if !authorized {
+                bail!("To change Spotify Liked Songs, sign out of Cadence and sign in again to grant library editing permission");
+            }
+            if liked {
+                self.client.library_add([LibraryId::Track(id)]).await?;
+            } else {
+                self.client.library_remove([LibraryId::Track(id)]).await?;
+            }
+            Ok(())
+        }).await
     }
 
     pub async fn liked_tracks(&self) -> Result<Vec<Track>> {
@@ -753,6 +774,9 @@ impl Spotify {
         if refreshed.refresh_token.is_none() {
             refreshed.refresh_token = previous.refresh_token;
         }
+        if refreshed.scopes.is_empty() {
+            refreshed.scopes = previous.scopes;
+        }
         let token_to_save = refreshed.clone();
         credential_worker::run(move || TokenVault::save(&token_to_save)).await?;
         *self
@@ -969,6 +993,74 @@ mod tests {
         classify_error, resolve_configuration, valid_client_id,
     };
     use rspotify::model::Image;
+
+    #[tokio::test]
+    async fn likes_use_the_current_library_api_and_old_scopes_make_no_write() {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = AuthCodePkceSpotify::with_config(
+            Credentials::new_pkce("test"),
+            OAuth::default(),
+            Config {
+                api_base_url: format!("http://{address}/v1/"),
+                token_refreshing: false,
+                ..Default::default()
+            },
+        );
+        *client.token.lock().await.unwrap() = Some(Token {
+            access_token: "test-token".into(),
+            expires_at: Some("2050-01-01T00:00:00Z".parse().unwrap()),
+            scopes: scopes!("user-library-read"),
+            ..Default::default()
+        });
+        let spotify = Spotify {
+            client,
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            gate: Arc::new(RateLimitGate::default()),
+        };
+        let id = "7a3LWj5xSFhFRYmztS8wgK";
+        let error = spotify.set_track_liked(id, true).await.unwrap_err();
+        assert!(error.to_string().contains("sign out"));
+        assert!(
+            timeout(Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+        spotify
+            .client
+            .token
+            .lock()
+            .await
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .scopes
+            .insert("user-library-modify".into());
+        let server = tokio::spawn(async move {
+            for method in ["PUT", "DELETE"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![0; 4096];
+                let count = socket.read(&mut bytes).await.unwrap();
+                let request = String::from_utf8_lossy(&bytes[..count]);
+                assert!(request.starts_with(&format!(
+                    "{method} /v1/me/library?uris=spotify%3Atrack%3A{id}"
+                )));
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
+        timeout(Duration::from_secs(5), async {
+            spotify.set_track_liked(id, true).await.unwrap();
+            spotify.set_track_liked(id, false).await.unwrap();
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
 
     fn status_error(status: u16, retry_after: Option<&str>) -> anyhow::Error {
         let mut builder = gpui_kit::http_client::http::Response::builder().status(status);

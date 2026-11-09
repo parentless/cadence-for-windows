@@ -31,7 +31,7 @@ jobs:
             system_profiler SPDisplaysDataType
             rustc --version
             cargo tree --locked -p gpui-kit --depth 0
-            shasum -a 256 tests/visual/fonts/*.ttf
+            shasum -a 256 assets/fonts/*.ttf
           } > "$CADENCE_UI_BASELINE/environment.txt"
           cp -f Cargo.lock "$CADENCE_UI_BASELINE/Cargo.lock"
       - name: Upload screenshots for review

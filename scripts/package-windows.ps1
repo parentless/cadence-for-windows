@@ -21,6 +21,7 @@ try {
     Copy-Item -LiteralPath $binary -Destination "$staging/cadence.exe" -Force
     Copy-Item -LiteralPath LICENSE, THIRD_PARTY_NOTICES.md -Destination $staging -Force
     Copy-Item -LiteralPath vendor/gpui-pre-windows/LICENSE-APACHE -Destination "$staging/GPUI-WINDOWS-LICENSE.txt" -Force
+    Copy-Item -LiteralPath assets/fonts/LICENSE.txt -Destination "$staging/INTER-LICENSE.txt" -Force
     Copy-Item -LiteralPath docs/WINDOWS.md -Destination "$staging/README.md" -Force
     Compress-Archive -Path "$staging/*" -DestinationPath "dist/$name.zip" -Force
     # The updater downloads the standalone executable; the zip includes notices

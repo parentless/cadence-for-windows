@@ -27,6 +27,6 @@ Older playlist chunks are evicted, but scroll position is retained: revisiting a
 distant range refetches that range directly. Playback continues independently
 using Spotify's raw item cursor.
 
-Artwork has a shared 48-entry / 32 MiB decoded-image budget. Cover colours sample
-at most 1,024 pixels once during background decoding and are evicted with their
-image. Artist skeletons are static; there is no shimmer timer or new blur pass.
+Artwork has a shared 48-entry / 32 MiB decoded-image budget. Detail pages use
+the same theme background as search, with no cover-colour sampling. Artist
+skeletons are static; there is no shimmer timer or new blur pass.

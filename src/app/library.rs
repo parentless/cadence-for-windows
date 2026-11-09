@@ -21,6 +21,7 @@ pub(super) struct Library {
     recently_played: Arc<[model::Track]>,
     local_loaded: bool,
     reload: Option<gpui_kit::Task<()>>,
+    spotify_like_request: Option<gpui_kit::Task<()>>,
     /// The backend is revalidating the cached contents it served at boot.
     boot_refreshing: bool,
     /// When the contents last arrived, so returning to the window repeatedly
@@ -30,6 +31,9 @@ pub(super) struct Library {
 
 /// Raised when fresh contents arrived, so stale failures can be cleared.
 pub(super) struct LibraryLoaded;
+
+pub(super) struct SpotifyLikeNotice(pub SharedString);
+impl EventEmitter<SpotifyLikeNotice> for Library {}
 
 impl EventEmitter<LibraryLoaded> for Library {}
 
@@ -46,6 +50,7 @@ impl Library {
             recently_played: Arc::default(),
             local_loaded: false,
             reload: None,
+            spotify_like_request: None,
             boot_refreshing: false,
             refreshed_at: None,
         }
@@ -65,7 +70,7 @@ impl Library {
                 .elapsed()
                 .is_ok_and(|elapsed| elapsed < REVALIDATION_DEBOUNCE)
         });
-        if self.reload.is_some() || fresh {
+        if self.spotify_like_request.is_some() || self.reload.is_some() || fresh {
             return;
         }
         let (respond, reply) = tokio::sync::oneshot::channel();
@@ -152,6 +157,57 @@ impl Library {
         cx.notify();
     }
 
+    pub(super) fn is_spotify_liked(&self, track: &model::Track) -> bool {
+        self.liked_tracks.iter().any(|candidate| {
+            candidate.provider == track.provider && candidate.source_id == track.source_id
+        })
+    }
+
+    /// Serialize writes and refreshes, keeping one bounded click-driven task.
+    pub(super) fn spotify_like_busy(&self) -> bool {
+        !self.loaded || self.reloading() || self.spotify_like_request.is_some()
+    }
+
+    pub(super) fn set_spotify_liked(
+        &mut self,
+        track: model::Track,
+        liked: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if track.provider != model::Provider::Spotify || self.spotify_like_busy() {
+            return;
+        }
+        let (respond, reply) = tokio::sync::oneshot::channel();
+        if !self.backend.send(BackendCommand::SetSpotifyLiked {
+            track: track.clone(),
+            liked,
+            respond,
+        }) {
+            cx.emit(SpotifyLikeNotice(BACKEND_UNAVAILABLE.into()));
+            return;
+        }
+        self.spotify_like_request = Some(cx.spawn(async move |this, cx| {
+            let result = reply.await;
+            let _ = this.update(cx, |library, cx| {
+                library.spotify_like_request = None;
+                match result {
+                    Ok(Ok(())) => {
+                        let mut tracks = Vec::with_capacity(library.liked_tracks.len() + usize::from(liked));
+                        if liked { tracks.push(track.clone()); }
+                        tracks.extend(library.liked_tracks.iter().filter(|candidate| candidate.provider != track.provider || candidate.source_id != track.source_id).cloned());
+                        library.liked_tracks = tracks.into();
+                        library.refreshed_at = Some(SystemTime::now());
+                        cx.emit(LibraryLoaded);
+                    }
+                    Ok(Err(error)) => cx.emit(SpotifyLikeNotice(format!("Spotify Liked Songs: {error:#}").into())),
+                    Err(_) => cx.emit(SpotifyLikeNotice("Spotify library update did not finish. Check your connection and try again.".into())),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
     pub(super) fn set_favorite(
         &mut self,
         track: model::Track,
@@ -178,6 +234,7 @@ impl Library {
     /// to the Spotify account and the backend re-sends it regardless.
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.reload = None;
+        self.spotify_like_request = None;
         self.boot_refreshing = false;
         self.refreshed_at = None;
         self.liked_tracks = Arc::default();

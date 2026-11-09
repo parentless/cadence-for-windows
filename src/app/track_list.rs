@@ -28,7 +28,6 @@ pub(super) struct TrackList {
     last_viewport: Option<Range<usize>>,
     scroll: gpui_kit::UniformListScrollHandle,
     hover: components::HoverHighlight,
-    palette: Option<CadencePalette>,
     menu_position: Option<gpui_kit::Point<Pixels>>,
     /// Album already on screen, whose "Go to album" entry would go nowhere.
     current_album_id: Option<String>,
@@ -55,7 +54,6 @@ impl TrackList {
             last_viewport: None,
             scroll: gpui_kit::UniformListScrollHandle::new(),
             hover: components::HoverHighlight::default(),
-            palette: None,
             menu_position: None,
             current_album_id: None,
             library: services::AppServices::library(cx),
@@ -70,11 +68,6 @@ impl TrackList {
         self
     }
 
-    pub(super) fn with_palette(mut self, palette: CadencePalette) -> Self {
-        self.palette = Some(palette);
-        self
-    }
-
     /// Artist top tracks are a bounded section inside the page's outer list.
     /// Avoid a nested scroll area so wheel input continues into Discography.
     pub(super) fn with_inline_rows(mut self) -> Self {
@@ -85,13 +78,6 @@ impl TrackList {
     pub(super) fn without_header(mut self) -> Self {
         self.hide_header = true;
         self
-    }
-
-    pub(super) fn set_palette(&mut self, palette: CadencePalette, cx: &mut Context<Self>) {
-        if self.palette.is_none_or(|old| old.canvas != palette.canvas) {
-            self.palette = Some(palette);
-            cx.notify();
-        }
     }
 
     pub(super) fn scroll_handle(&self) -> gpui_kit::UniformListScrollHandle {
@@ -206,9 +192,7 @@ impl TrackList {
             self.tracks.get(index).cloned()
         };
         let Some(track) = track else {
-            let palette = self
-                .palette
-                .unwrap_or_else(|| appearance::Appearance::palette(cx));
+            let palette = appearance::Appearance::palette(cx);
             let unavailable = self
                 .playlist_tracks
                 .as_ref()
@@ -228,12 +212,7 @@ impl TrackList {
                 })
                 .into_any_element();
         };
-        let mut palette = self
-            .palette
-            .unwrap_or_else(|| appearance::Appearance::palette(cx));
-        palette.selection = services::AppServices::preferences(cx)
-            .selection_color
-            .fill(self.palette.is_some() || palette.canvas == CadencePalette::DARK.canvas);
+        let palette = appearance::Appearance::palette(cx);
         let is_current_track = self.player.read(cx).is_current_track(&track);
         let favorite = self.library.read(cx).is_favorite(&track);
         let menu_key = format!("{}:{index}", track.source_id);
@@ -316,17 +295,15 @@ impl TrackList {
         is_current_track: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut palette = self
-            .palette
-            .unwrap_or_else(|| appearance::Appearance::palette(cx));
-        palette.selection = services::AppServices::preferences(cx)
-            .selection_color
-            .fill(self.palette.is_some() || palette.canvas == CadencePalette::DARK.canvas);
+        let palette = appearance::Appearance::palette(cx);
         let has_playback_context = self.player.read(cx).now_playing().is_some();
         let next_track = track.clone();
         let queue_track = track.clone();
         let radio_track = track.clone();
         let favorite_track = track.clone();
+        let spotify_track = track.clone();
+        let spotify_liked = self.library.read(cx).is_spotify_liked(track);
+        let spotify_like_busy = self.library.read(cx).spotify_like_busy();
         let artist = track
             .artists
             .iter()
@@ -426,6 +403,38 @@ impl TrackList {
                     cx.notify();
                 })),
             )
+            .when(track.provider == model::Provider::Spotify, |menu| {
+                let label = if spotify_like_busy {
+                    "Spotify library is updating…"
+                } else if spotify_liked {
+                    "Remove from Spotify Liked Songs"
+                } else {
+                    "Add to Spotify Liked Songs"
+                };
+                if spotify_like_busy {
+                    menu.child(components::disabled_text_menu_item(
+                        palette,
+                        ("track-menu-spotify-like", index),
+                        label,
+                    ))
+                } else {
+                    menu.child(
+                        components::text_menu_item(
+                            palette,
+                            ("track-menu-spotify-like", index),
+                            label,
+                        )
+                        .test_support()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.menu_open = None;
+                            this.library.update(cx, |library, cx| {
+                                library.set_spotify_liked(spotify_track.clone(), !spotify_liked, cx)
+                            });
+                            cx.notify();
+                        })),
+                    )
+                }
+            })
             .child(separator())
             .when_some(artist, |menu, artist| {
                 menu.child(
@@ -466,12 +475,7 @@ impl TrackList {
 
 impl Render for TrackList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut palette = self
-            .palette
-            .unwrap_or_else(|| appearance::Appearance::palette(cx));
-        palette.selection = services::AppServices::preferences(cx)
-            .selection_color
-            .fill(self.palette.is_some() || palette.canvas == CadencePalette::DARK.canvas);
+        let palette = appearance::Appearance::palette(cx);
         let compact = self.queue_mode || is_compact_content_layout(window);
         if self.inline_rows {
             let rows = (0..self.track_count())

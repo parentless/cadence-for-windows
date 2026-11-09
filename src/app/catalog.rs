@@ -493,14 +493,8 @@ impl PlaylistPage {
 }
 
 /// One artist, their popular tracks and their discography.
-const ARTIST_BACKGROUND: u32 = 0x242426;
-const ARTIST_PALETTE: CadencePalette = CadencePalette {
-    canvas: ARTIST_BACKGROUND,
-    surface: ARTIST_BACKGROUND,
-    surface_raised: 0x303033,
-    surface_hover: 0x2D2D30,
-    ..CadencePalette::DARK
-};
+/// Equal breathing room above and below detail-page artwork.
+const DETAIL_HEADER_PADDING: Rems = Rems(3.5);
 
 pub(super) struct ArtistPage {
     backend: BackendHandle,
@@ -510,6 +504,7 @@ pub(super) struct ArtistPage {
     albums: Arc<[model::Album]>,
     content_state: gpui_kit::ListState,
     content_layout: Option<(usize, usize, usize, Pixels)>,
+    content_columns: usize,
     loaded: bool,
     error: Option<SharedString>,
     loaded_at: Option<SystemTime>,
@@ -523,11 +518,7 @@ impl EventEmitter<PageEvent> for ArtistPage {}
 
 impl ArtistPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
-        let track_list = cx.new(|cx| {
-            TrackList::new(cx)
-                .with_palette(ARTIST_PALETTE)
-                .with_inline_rows()
-        });
+        let track_list = cx.new(|cx| TrackList::new(cx).with_inline_rows());
         Self {
             backend,
             reference: None,
@@ -536,6 +527,7 @@ impl ArtistPage {
             albums: Arc::default(),
             content_state: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.)),
             content_layout: None,
+            content_columns: 1,
             loaded: false,
             error: None,
             loaded_at: None,
@@ -634,7 +626,7 @@ impl ArtistPage {
                 .test_support()
                 .text_xl()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .text_color(rgb(ARTIST_PALETTE.text_primary))
+                .text_color(rgb(appearance::Appearance::palette(cx).text_primary))
                 .child(title)
         };
         if index == 0 {
@@ -646,7 +638,7 @@ impl ArtistPage {
                 .child(heading("artist-popular-heading", "Popular"))
                 .when(self.tracks.is_empty(), |section| {
                     section.child(components::page_detail(
-                        ARTIST_PALETTE,
+                        appearance::Appearance::palette(cx),
                         "No popular tracks available",
                     ))
                 })
@@ -666,7 +658,7 @@ impl ArtistPage {
                 .child(heading("artist-discography-heading", "Discography"))
                 .when(self.albums.is_empty(), |section| {
                     section.child(components::page_detail(
-                        ARTIST_PALETTE,
+                        appearance::Appearance::palette(cx),
                         "No releases available",
                     ))
                 })
@@ -690,7 +682,7 @@ impl ArtistPage {
     }
 
     fn album_card(&self, album: &model::Album, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let palette = ARTIST_PALETTE;
+        let palette = appearance::Appearance::palette(cx);
         let year = album
             .release_date
             .as_deref()
@@ -1059,7 +1051,7 @@ impl Render for SearchPage {
 }
 
 impl Render for PlaylistPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tracks = self.tracks.clone();
         let loaded = self.loaded;
         let empty = tracks.borrow().is_empty();
@@ -1085,9 +1077,7 @@ impl Render for PlaylistPage {
             .selected
             .as_ref()
             .and_then(|playlist| playlist.artwork_url.clone());
-        let palette = collection_palette(artwork_url.as_deref(), &self.image_cache, window, cx);
-        self.track_list
-            .update(cx, |list, cx| list.set_palette(palette, cx));
+        let palette = appearance::Appearance::palette(cx);
         let list = if let Some(error) = self.error.as_deref().filter(|_| empty) {
             components::empty_state(palette, format!("Unable to load playlist: {error}"))
                 .into_any_element()
@@ -1130,9 +1120,9 @@ impl Render for PlaylistPage {
         let playback_tracks = tracks;
 
         components::page("playlist-page")
-            .bg(rgb(palette.canvas))
+            .bg(rgb(palette.surface))
             .text_color(rgb(palette.text))
-            .pt_2()
+            .pt(DETAIL_HEADER_PADDING)
             .child(
                 page_header()
                     .child(components::artwork(
@@ -1206,7 +1196,7 @@ impl Render for PlaylistPage {
 
 impl Render for ArtistPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = ARTIST_PALETTE;
+        let palette = appearance::Appearance::palette(cx);
         let name = self
             .artist
             .as_ref()
@@ -1228,19 +1218,7 @@ impl Render for ArtistPage {
             "Spotify artist".to_owned()
         };
         let tracks = self.tracks.clone();
-        // Reserve the widest sidebar to remain safe throughout its animation,
-        // and fit fixed-width cards without stretching their hover surfaces.
-        let available = window.viewport_size().width
-            - (EXPANDED_SIDEBAR_WIDTH + Rems(4.)).to_pixels(window.rem_size());
-        let stride = (tokens::ALBUM_CARD_ARTWORK.size + Rems(1.5)).to_pixels(window.rem_size());
-        let fits = ((available + Rems(0.5).to_pixels(window.rem_size())) / stride)
-            .floor()
-            .max(1.) as usize;
-        let columns = fits.min(if is_compact_content_layout(window) {
-            3
-        } else {
-            4
-        });
+        let columns = self.content_columns;
         let content = if let Some(error) = self.error.as_ref() {
             components::empty_state(palette, format!("Unable to load artist: {error}"))
                 .into_any_element()
@@ -1286,21 +1264,23 @@ impl Render for ArtistPage {
             .test_support()
             .relative()
             .w_full()
-            .h(Rems(13.).to_pixels(window.rem_size()) + overlay_inset)
+            .h((tokens::ARTIST_ARTWORK.size + DETAIL_HEADER_PADDING * 2.)
+                .to_pixels(window.rem_size())
+                + overlay_inset)
             .flex_none()
             .overflow_hidden()
             .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
             .child(div().absolute().inset_0().bg(gpui_kit::rgba(0x10101455)))
             .child(div().absolute().inset_0().bg(gpui_kit::linear_gradient(
                 180.,
-                gpui_kit::linear_color_stop(rgb(ARTIST_BACKGROUND).opacity(0.05), 0.),
-                gpui_kit::linear_color_stop(rgb(ARTIST_BACKGROUND), 1.),
+                gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.05), 0.),
+                gpui_kit::linear_color_stop(rgb(palette.surface), 1.),
             )))
             .child(
                 page_header()
                     .relative()
                     .px_8()
-                    .pt(Rems(1.5).to_pixels(window.rem_size()) + overlay_inset)
+                    .pt(DETAIL_HEADER_PADDING.to_pixels(window.rem_size()) + overlay_inset)
                     .items_end()
                     .child(
                         div()
@@ -1333,7 +1313,7 @@ impl Render for ArtistPage {
             .min_h_0()
             .flex()
             .flex_col()
-            .bg(rgb(ARTIST_BACKGROUND))
+            .bg(rgb(palette.surface))
             .text_color(rgb(palette.text))
             .child(header)
             .child(
@@ -1342,15 +1322,49 @@ impl Render for ArtistPage {
                     .min_h_0()
                     .px_8()
                     .pb_8()
+                    .relative()
                     .flex()
                     .flex_col()
-                    .child(content),
+                    .child(content)
+                    // Measure the actual content width, including sidebar animation
+                    // and zoom. Only a column-count change schedules another layout.
+                    .child(
+                        gpui_kit::canvas(
+                            {
+                                let page = cx.weak_entity();
+                                move |bounds, window, cx| {
+                                    let gap = Rems(0.5).to_pixels(window.rem_size());
+                                    let stride = (tokens::ALBUM_CARD_ARTWORK.size + Rems(1.5))
+                                        .to_pixels(window.rem_size());
+                                    let available =
+                                        bounds.size.width - Rems(4.).to_pixels(window.rem_size());
+                                    let fits =
+                                        ((available + gap) / stride).floor().max(1.) as usize;
+                                    if fits != columns {
+                                        let page = page.clone();
+                                        cx.defer(move |cx| {
+                                            let _ = page.update(cx, |page, cx| {
+                                                if page.content_columns != fits {
+                                                    page.content_columns = fits;
+                                                    cx.notify();
+                                                }
+                                            });
+                                        });
+                                    }
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0()
+                        .size_full(),
+                    ),
             )
     }
 }
 
 impl Render for AlbumPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let name = self
             .album
             .as_ref()
@@ -1366,9 +1380,7 @@ impl Render for AlbumPage {
                     .as_ref()
                     .and_then(|album| album.artwork_url.clone())
             });
-        let palette = collection_palette(artwork_url.as_deref(), &self.image_cache, window, cx);
-        self.track_list
-            .update(cx, |list, cx| list.set_palette(palette, cx));
+        let palette = appearance::Appearance::palette(cx);
         let detail = self.album.as_ref().map_or_else(
             || "Spotify album".to_owned(),
             |album| {
@@ -1411,9 +1423,9 @@ impl Render for AlbumPage {
         let playback_tracks = tracks;
 
         components::page("album-page")
-            .bg(rgb(palette.canvas))
+            .bg(rgb(palette.surface))
             .text_color(rgb(palette.text))
-            .pt_2()
+            .pt(DETAIL_HEADER_PADDING)
             .child(
                 page_header()
                     .child(components::artwork(
@@ -1444,26 +1456,14 @@ impl Render for AlbumPage {
     }
 }
 
-fn collection_palette(
-    url: Option<&str>,
-    cache: &Entity<image_cache::BoundedImageCache>,
-    window: &mut Window,
-    cx: &mut App,
-) -> CadencePalette {
-    let background = url
-        .and_then(|url| cache.update(cx, |cache, cx| cache.artwork_tint(url, window, cx)))
-        .unwrap_or(ARTIST_BACKGROUND);
-    CadencePalette {
-        canvas: background,
-        surface: background,
-        text_muted: 0xB8B4AF,
-        ..CadencePalette::DARK
-    }
-}
-
 /// The artwork-and-title band a detail page opens with.
 fn page_header() -> Div {
-    div().flex().flex_none().items_center().gap_7().mb_6()
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_7()
+        .mb(DETAIL_HEADER_PADDING)
 }
 
 #[cfg(test)]

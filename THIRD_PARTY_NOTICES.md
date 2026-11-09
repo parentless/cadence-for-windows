@@ -50,3 +50,9 @@ shader loading to use embedded source instead of the build machine's files.
 Optimized builds keep the original precompiled shader path. The complete
 license is in `vendor/gpui-pre-windows/LICENSE-APACHE` in source distributions
 and `GPUI-WINDOWS-LICENSE.txt` in Windows binary ZIPs.
+
+## Inter fonts
+
+Cadence embeds Inter 3.19 by Rasmus Andersson under the SIL Open Font License
+1.1. The full copyright and license notice is in `assets/fonts/LICENSE.txt`
+in source distributions and `INTER-LICENSE.txt` in Windows binary ZIPs.

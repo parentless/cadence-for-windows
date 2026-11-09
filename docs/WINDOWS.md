@@ -204,3 +204,18 @@ media keys, queue actions, and Discord presence retain their behavior.
 
 Windows diagnostic logs rotate during the run, retaining at most two 5 MiB
 files (current and previous). This bounds log disk usage without a restart.
+
+### Spotify Liked Songs
+
+Right-click a track and choose **Add to Spotify Liked Songs** or **Remove from
+Spotify Liked Songs**. These actions change your Spotify account. Stars and
+Favorites remain local to Cadence. If you signed in before this feature was
+added, sign out through the account menu and sign in again once to approve
+`user-library-modify`. The app reports failed writes and preserves the prior
+state. One click-driven request runs at a time; it waits for library refresh
+to finish and does not poll Spotify in the background.
+
+The executable embeds Inter and loads the same font family/weights as the
+native previews. No font installation is needed. Windows and macOS still use
+different rasterizers, and monitor scaling, HDR and colour profiles can affect
+the appearance. The app uses the same theme colour values on both platforms.

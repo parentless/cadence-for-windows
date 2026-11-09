@@ -322,6 +322,11 @@ pub enum BackendCommand {
         position_ms: u32,
         playing: bool,
     },
+    SetSpotifyLiked {
+        track: Track,
+        liked: bool,
+        respond: Reply<()>,
+    },
     SetFavorite {
         track: Track,
         favorite: bool,
@@ -1295,6 +1300,52 @@ impl Worker {
                 position_ms,
                 playing,
             } => self.restore_playback(position_ms, playing).await,
+            BackendCommand::SetSpotifyLiked {
+                track,
+                liked,
+                respond,
+            } => {
+                let spotify = self.spotify.clone();
+                let store = self.store.clone();
+                let fingerprint = self.catalog.library_fingerprint.clone();
+                let current_generation = self.catalog_generation.clone();
+                let generation = self.account_generation;
+                if self
+                    .catalog
+                    .library_write
+                    .as_ref()
+                    .is_some_and(|task| !task.is_finished())
+                {
+                    let _ = respond.send(Err(anyhow!(
+                        "Another Spotify library update is still running"
+                    )));
+                    return None;
+                }
+                CatalogFetches::start(
+                    &mut self.catalog.library_write,
+                    respond,
+                    "Spotify library update",
+                    async move {
+                        spotify.set_track_liked(&track.source_id, liked).await?;
+                        set_fingerprint(&fingerprint, None);
+                        if let Err(error) = store
+                            .call(move |store| {
+                                if current_generation.load(Ordering::Acquire) == generation {
+                                    store.set_cached_track_liked(&track, liked)?;
+                                }
+                                Ok(())
+                            })
+                            .await
+                        {
+                            log::warn!(
+                                "library: Spotify saved the change but cache update failed: {error:#}"
+                            );
+                        }
+                        Ok(())
+                    },
+                );
+                Ok(())
+            }
             BackendCommand::SetFavorite { track, favorite } => {
                 self.set_favorite(track, favorite).await
             }
@@ -2452,6 +2503,7 @@ async fn wait_for_shutdown(shutdown: &mut tokio::sync::watch::Receiver<bool>) {
 /// starting another aborts the previous.
 #[derive(Default)]
 struct CatalogFetches {
+    library_write: Option<tokio::task::JoinHandle<()>>,
     library: Option<tokio::task::JoinHandle<()>>,
     reload: Option<tokio::task::JoinHandle<()>>,
     search: Option<tokio::task::JoinHandle<()>>,
@@ -2551,6 +2603,7 @@ impl CatalogFetches {
     }
 
     fn abort_all(&mut self) {
+        abort_task(&mut self.library_write);
         abort_task(&mut self.library);
         abort_task(&mut self.reload);
         abort_task(&mut self.search);

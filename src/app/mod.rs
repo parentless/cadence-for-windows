@@ -373,6 +373,7 @@ mod catalog;
 mod chrome;
 mod components;
 mod events;
+mod fonts;
 mod icons;
 mod library;
 mod library_pages;

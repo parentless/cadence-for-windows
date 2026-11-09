@@ -784,6 +784,28 @@ impl Store {
         Ok(())
     }
 
+    /// Update only the affected cached row. Negative positions prepend without
+    /// rewriting or renumbering the rest of the library.
+    pub fn set_cached_track_liked(&mut self, track: &Track, liked: bool) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM liked_tracks_cache WHERE json_extract(track_json, '$.provider') = ?1 AND json_extract(track_json, '$.source_id') = ?2",
+            params![track.provider.as_str(), track.source_id],
+        )?;
+        if liked {
+            transaction.execute(
+                "INSERT INTO liked_tracks_cache (position, track_json, refreshed_at) SELECT COALESCE(MIN(position), 0) - 1, ?1, unixepoch() FROM liked_tracks_cache",
+                params![serde_json::to_string(track)?],
+            )?;
+        }
+        transaction.execute(
+            "DELETE FROM preferences WHERE key = ?1",
+            params![LIBRARY_FINGERPRINT_KEY],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn clear_library_cache(&mut self) -> Result<()> {
         self.replace_library_cache(&[], &[], None)
     }
@@ -1104,6 +1126,28 @@ mod tests {
                 vec![track("next")]
             );
         }
+    }
+
+    #[test]
+    fn spotify_like_cache_writes_prepend_deduplicate_and_preserve_other_state() {
+        let mut store = Store::in_memory().unwrap();
+        store
+            .replace_library_cache(&[track("one"), track("two")], &[], None)
+            .unwrap();
+        store.set_favorite(&track("one"), true).unwrap();
+        store.set_cached_track_liked(&track("three"), true).unwrap();
+        store.set_cached_track_liked(&track("three"), true).unwrap();
+        assert_eq!(
+            store.liked_tracks().unwrap(),
+            vec![track("three"), track("one"), track("two")]
+        );
+        store.set_cached_track_liked(&track("one"), false).unwrap();
+        assert_eq!(
+            store.liked_tracks().unwrap(),
+            vec![track("three"), track("two")]
+        );
+        assert_eq!(store.favorites().unwrap(), vec![track("one")]);
+        assert!(store.cached_library().unwrap().fingerprint.is_none());
     }
 
     #[test]

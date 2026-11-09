@@ -38,6 +38,9 @@ pub(super) fn run() {
     });
     app.run(move |cx: &mut App| {
         log::info!("startup: gpui application running");
+        if let Err(error) = fonts::register(cx) {
+            log::warn!("startup: could not load bundled Inter fonts: {error:#}");
+        }
         gpui_kit::init(cx);
         cx.set_http_client(Arc::new(
             http::ImageHttpClient::new().expect("could not configure image HTTP client"),

@@ -73,6 +73,13 @@ impl Workspace {
                 cx.notify();
             }),
         );
+        subscriptions.push(cx.subscribe(
+            &library,
+            |this, _, notice: &library::SpotifyLikeNotice, cx| {
+                this.action_notice = Some(notice.0.clone());
+                cx.notify();
+            },
+        ));
         let backend = services::AppServices::backend(cx);
         let library_page = |section, cx: &mut Context<Self>| {
             cx.new(|cx| library_pages::LibraryTracksPage::new(section, cx))
