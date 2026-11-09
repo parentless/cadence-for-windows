@@ -73,10 +73,13 @@ pub(super) struct Sidebar {
     playlist_hover: components::HoverHighlight,
     playlist_source: Arc<[model::Playlist]>,
     playlist_order: Arc<[usize]>,
+    pinned_source: Arc<[model::Playlist]>,
+    pinned_count: usize,
     playlist_scroll: gpui_kit::UniformListScrollHandle,
     active_playlist: Option<String>,
     reorder_generation: usize,
     reorder_position: usize,
+    reorder_destination: usize,
     reorder_started: Option<std::time::Instant>,
     /// The route to highlight, pushed by the workspace when it navigates.
     route: Route,
@@ -123,10 +126,13 @@ impl Sidebar {
             playlist_hover: components::HoverHighlight::default(),
             playlist_source: Arc::from([]),
             playlist_order: Arc::from([]),
+            pinned_source: Arc::from([]),
+            pinned_count: 0,
             playlist_scroll: gpui_kit::UniformListScrollHandle::new(),
             active_playlist: None,
             reorder_generation: 0,
             reorder_position: 0,
+            reorder_destination: 0,
             reorder_started: None,
             brand_mark: services::AppServices::brand_mark(cx),
             route: Route::LikedSongs,
@@ -172,14 +178,17 @@ impl Sidebar {
     }
 
     fn promote_playlist(&mut self, position: usize, cx: &mut Context<Self>) {
-        if position == 0 {
+        let destination = self.pinned_count;
+        // Pins retain their order and cannot be displaced by recency.
+        if position <= destination {
             return;
         }
         let mut order = self.playlist_order.to_vec();
         self.reorder_position = position;
+        self.reorder_destination = destination;
         self.reorder_started = Some(cx.background_executor().now());
         let index = order.remove(position);
-        order.insert(0, index);
+        order.insert(destination, index);
         self.playlist_order = order.into();
         self.playlist_scroll
             .scroll_to_item(0, gpui_kit::ScrollStrategy::Top);
@@ -374,11 +383,49 @@ impl Sidebar {
         } else {
             library.playlists().clone()
         };
-        if !Arc::ptr_eq(&self.playlist_source, &playlists) {
+        let pins = library.pinned_playlists().clone();
+        let catalog_changed = !Arc::ptr_eq(&self.playlist_source, &playlists);
+        let pins_changed = !Arc::ptr_eq(&self.pinned_source, &pins)
+            && self.pinned_source.as_ref() != pins.as_ref();
+        if catalog_changed || pins_changed {
+            // Rebuild only when either Arc changes, never per hover/frame.
+            let pinned_keys: HashSet<_> = pins
+                .iter()
+                .map(|p| (p.provider, p.source_id.as_str()))
+                .collect();
+            let index_at = |position| {
+                if catalog_changed {
+                    position
+                } else {
+                    self.playlist_order[position]
+                }
+            };
+            let is_pinned = |index: &usize| {
+                pinned_keys.contains(&(
+                    playlists[*index].provider,
+                    playlists[*index].source_id.as_str(),
+                ))
+            };
+            let mut order = Vec::with_capacity(playlists.len());
+            order.extend((0..playlists.len()).map(index_at).filter(is_pinned));
+            self.pinned_count = order.len();
+            order.extend(
+                (0..playlists.len())
+                    .map(index_at)
+                    .filter(|index| !is_pinned(index)),
+            );
             self.playlist_source = playlists.clone();
-            self.playlist_order = (0..playlists.len()).collect::<Vec<_>>().into();
+            self.pinned_source = pins;
+            self.playlist_order = order.into();
             self.playlist_hover = components::HoverHighlight::default();
+            self.reorder_started = None;
+            self.reorder_generation = 0;
+        } else {
+            // Local favorite/history writes can return an equal new pin snapshot.
+            // Adopt its Arc without rebuilding the playlist order.
+            self.pinned_source = pins;
         }
+        let pinned_count = self.pinned_count;
         let order = self.playlist_order.clone();
         let active_playlist = if self.route == Route::Playlist {
             self.active_playlist.clone()
@@ -387,6 +434,7 @@ impl Sidebar {
         };
         let reorder_generation = self.reorder_generation;
         let reorder_position = self.reorder_position;
+        let reorder_destination = self.reorder_destination;
         let show_pinned = !playlists.is_empty();
         let reduce_motion = cx.reduce_motion();
         let reorder_progress = if reduce_motion {
@@ -432,9 +480,7 @@ impl Sidebar {
                                     } else {
                                         palette.canvas
                                     };
-                                    let pinned = services::AppServices::library(cx)
-                                        .read(cx)
-                                        .is_playlist_pinned(&playlist);
+                                    let pinned = position < pinned_count;
                                     let row = components::row_button(
                                         palette,
                                         (
@@ -528,9 +574,11 @@ impl Sidebar {
                                     };
                                     let offset = if reorder_generation == 0 {
                                         0.
-                                    } else if position == 0 {
-                                        reorder_position as f32
-                                    } else if position <= reorder_position {
+                                    } else if position == reorder_destination {
+                                        (reorder_position - reorder_destination) as f32
+                                    } else if position > reorder_destination
+                                        && position <= reorder_position
+                                    {
                                         -1.
                                     } else {
                                         0.

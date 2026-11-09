@@ -220,9 +220,28 @@ impl TrackList {
         let menu = menu_open
             .then(|| self.action_menu(&track, index, favorite, is_current_track, cx))
             .map(IntoElement::into_any_element);
-        let favorite_track = track.clone();
+        // Share one small identity across callbacks, rather than a full Track.
+        // Input from a stale frame must never act on a different replacement row.
+        let source_id: Rc<str> = Rc::from(track.source_id.as_str());
+        let provider = track.provider;
+        let can_navigate = track
+            .artists
+            .iter()
+            .any(|artist| artist.source_id.is_some())
+            || track
+                .album_ref
+                .as_ref()
+                .is_some_and(|album| album.source_id.is_some());
         track_row::TrackRow::new(index, track, palette, self.image_cache.clone())
             .compact(compact)
+            .when(can_navigate, |row| {
+                let source_id = source_id.clone();
+                row.navigation(cx.listener(
+                    move |this, target: &track_row::TrackNavigation, _, cx| {
+                        this.navigate_row(index, provider, &source_id, *target, cx);
+                    },
+                ))
+            })
             .current(is_current_track)
             .playback_control(
                 self.player.read(cx).playing(),
@@ -242,9 +261,28 @@ impl TrackList {
             .menu(menu)
             .on_play(cx.listener(move |this, _, _, cx| this.play_from(index, cx)))
             .on_favorite(cx.listener(move |this, _, _, cx| {
-                this.library.update(cx, |library, cx| {
-                    library.set_favorite(favorite_track.clone(), !favorite, cx)
-                });
+                // The full metadata copy is needed only when sending a write,
+                // not whenever scrolling or hover repaints this visible row.
+                let track = if let Some(buffer) = &this.playlist_tracks {
+                    buffer
+                        .borrow()
+                        .get(index)
+                        .filter(|track| {
+                            track.provider == provider && track.source_id == source_id.as_ref()
+                        })
+                        .cloned()
+                } else {
+                    this.tracks
+                        .get(index)
+                        .filter(|track| {
+                            track.provider == provider && track.source_id == source_id.as_ref()
+                        })
+                        .cloned()
+                };
+                if let Some(track) = track {
+                    this.library
+                        .update(cx, |library, cx| library.set_favorite(track, !favorite, cx));
+                }
             }))
             .context_menu(
                 self.menu_position,
@@ -255,6 +293,46 @@ impl TrackList {
                 }),
             )
             .into_any_element()
+    }
+
+    /// Resolve references only on activation. Painting links captures small
+    /// indices, rather than cloning artist/album metadata on every hover frame.
+    fn navigate_row(
+        &mut self,
+        index: usize,
+        provider: model::Provider,
+        source_id: &str,
+        target: track_row::TrackNavigation,
+        cx: &mut Context<Self>,
+    ) {
+        let event_for = |track: &model::Track| {
+            if track.provider != provider || track.source_id != source_id {
+                return None;
+            }
+            match target {
+                track_row::TrackNavigation::Artist(index) => track
+                    .artists
+                    .get(index)
+                    .filter(|artist| artist.source_id.is_some())
+                    .cloned()
+                    .map(PageEvent::OpenArtist),
+                track_row::TrackNavigation::Album => track
+                    .album_ref
+                    .as_ref()
+                    .filter(|album| album.source_id.is_some())
+                    .cloned()
+                    .map(PageEvent::OpenAlbum),
+            }
+        };
+        let event = if let Some(buffer) = &self.playlist_tracks {
+            buffer.borrow().get(index).and_then(event_for)
+        } else {
+            self.tracks.get(index).and_then(event_for)
+        };
+        if let Some(event) = event {
+            self.menu_open = None;
+            cx.emit(event);
+        }
     }
 
     pub(super) fn set_playlist_context(
@@ -498,42 +576,58 @@ impl Render for TrackList {
             .overflow_hidden()
             .relative()
             .when(!self.hide_header, |list| {
-                list.child(track_row::track_list_header(palette, compact))
+                list.child(
+                    div()
+                        .pr(px(16.))
+                        .child(track_row::track_list_header(palette, compact)),
+                )
             })
             .child(
-                uniform_list(
-                    self.id
-                        .clone()
-                        .expect("show sets the id before first paint"),
-                    self.track_count(),
-                    cx.processor(move |this, range: Range<usize>, _, cx| {
-                        range
-                            .map(|index| {
-                                if index < this.track_count() {
-                                    this.row(index, compact, cx)
-                                } else {
-                                    div()
-                                        .h_16()
-                                        .w_full()
-                                        .child(components::list_skeleton_rows(palette, 1))
-                                        .into_any_element()
-                                }
+                div()
+                    .id("track-scroll-viewport")
+                    .test_support()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        uniform_list(
+                            self.id
+                                .clone()
+                                .expect("show sets the id before first paint"),
+                            self.track_count(),
+                            cx.processor(move |this, range: Range<usize>, _, cx| {
+                                range
+                                    .map(|index| {
+                                        if index < this.track_count() {
+                                            this.row(index, compact, cx)
+                                        } else {
+                                            div()
+                                                .h_16()
+                                                .w_full()
+                                                .child(components::list_skeleton_rows(palette, 1))
+                                                .into_any_element()
+                                        }
+                                    })
+                                    .collect()
+                            }),
+                        )
+                        .when(self.playlist_tracks.is_some(), |list| {
+                            list.with_decoration(PlaylistViewport {
+                                list: cx.entity().downgrade(),
                             })
-                            .collect()
-                    }),
-                )
-                .when(self.playlist_tracks.is_some(), |list| {
-                    list.with_decoration(PlaylistViewport {
-                        list: cx.entity().downgrade(),
-                    })
-                })
-                .track_scroll(&self.scroll)
-                .flex_1()
-                .min_h_0(),
-            )
-            .child(
-                gpui_kit::base::Scrollbar::vertical(&self.scroll)
-                    .mode(gpui_kit::base::ScrollbarMode::Always),
+                        })
+                        .track_scroll(&self.scroll)
+                        .flex_1()
+                        .min_h_0()
+                        .mr(px(16.)),
+                    )
+                    .child(
+                        gpui_kit::base::Scrollbar::vertical(&self.scroll)
+                            .viewport_from_layout()
+                            .mode(gpui_kit::base::ScrollbarMode::Always),
+                    ),
             )
     }
 }

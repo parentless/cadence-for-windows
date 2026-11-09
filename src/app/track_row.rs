@@ -67,6 +67,14 @@ fn ellipsized_line() -> Div {
     div().text_ellipsis().line_clamp(1)
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum TrackNavigation {
+    Artist(usize),
+    Album,
+}
+
+type NavigationCallback = Rc<dyn Fn(&TrackNavigation, &mut Window, &mut App)>;
+
 type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type HoverCallback = Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
 type ContextCallback = Box<dyn Fn(&gpui_kit::MouseDownEvent, &mut Window, &mut App) + 'static>;
@@ -90,6 +98,7 @@ pub(super) struct TrackRow {
     /// Anchored to the pointer while the context menu is open.
     menu: Option<AnyElement>,
     on_play: Option<RowCallback>,
+    on_navigate: Option<NavigationCallback>,
     on_favorite: Option<RowCallback>,
     on_context_menu: Option<ContextCallback>,
     hover_transition: Option<components::HoverTransition>,
@@ -116,6 +125,7 @@ impl TrackRow {
             favorite: false,
             menu: None,
             on_play: None,
+            on_navigate: None,
             on_favorite: None,
             on_context_menu: None,
             hover_transition: None,
@@ -174,6 +184,85 @@ impl TrackRow {
         self
     }
 
+    pub(super) fn navigation(
+        mut self,
+        handler: impl Fn(&TrackNavigation, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_navigate = Some(Rc::new(handler));
+        self
+    }
+
+    fn navigation_link(
+        &self,
+        id: impl Into<ElementId>,
+        target: TrackNavigation,
+        text: AnyElement,
+        window: &Window,
+        keyboard: bool,
+    ) -> AnyElement {
+        let Some(handler) = self.on_navigate.clone() else {
+            return text;
+        };
+        components::link(self.palette, id, window)
+            .min_w_0()
+            .justify_start()
+            .tab_stop(keyboard)
+            .on_click(move |event, window, cx| {
+                cx.stop_propagation();
+                if event.is_keyboard() || event.click_count() == 1 {
+                    handler(&target, window, cx);
+                }
+            })
+            .child(text)
+            .into_any_element()
+    }
+
+    fn artist_line(&self, window: &Window) -> AnyElement {
+        let text = |name: SharedString| ellipsized_line().child(name).into_any_element();
+        if self.track.artists.is_empty() {
+            return text(self.track.artist.clone());
+        }
+        let mut next = next_artist_credit(&self.track, 0);
+        if next.is_none() {
+            return text(self.track.artist.clone());
+        }
+        let fragment = |value: &str| {
+            if value == ", " {
+                SharedString::new_static(", ")
+            } else {
+                value.to_owned().into()
+            }
+        };
+        let mut credits = div()
+            .id(("track-artists", self.index))
+            .flex()
+            .min_w_0()
+            .overflow_hidden();
+        let mut cursor = 0;
+        // Preserve the displayed credit verbatim, even when older metadata
+        // contains references for only some collaborators. Match whole credits,
+        // including artists whose actual names contain commas.
+        while let Some((start, index)) = next {
+            if start > cursor {
+                credits = credits.child(text(fragment(&self.track.artist[cursor..start])));
+            }
+            let artist = &self.track.artists[index];
+            credits = credits.child(self.navigation_link(
+                ("track-artist", index),
+                TrackNavigation::Artist(index),
+                text(artist.name.clone()),
+                window,
+                true,
+            ));
+            cursor = start + artist.name.len();
+            next = next_artist_credit(&self.track, cursor);
+        }
+        if cursor < self.track.artist.len() {
+            credits = credits.child(text(self.track.artist[cursor..].to_owned().into()));
+        }
+        credits.into_any_element()
+    }
+
     pub(super) fn on_favorite(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -193,6 +282,28 @@ impl TrackRow {
     }
 }
 
+/// The next reference that matches a whole displayed credit. Borrowed string
+/// scans avoid fetching metadata or retaining another copy of a track's names.
+fn next_artist_credit(track: &model::Track, cursor: usize) -> Option<(usize, usize)> {
+    track
+        .artists
+        .iter()
+        .enumerate()
+        .filter(|(_, artist)| artist.source_id.is_some() && !artist.name.is_empty())
+        .filter_map(|(index, artist)| {
+            track.artist[cursor..]
+                .match_indices(artist.name.as_ref())
+                .map(|(offset, _)| cursor + offset)
+                .find(|start| {
+                    let end = start + artist.name.len();
+                    (*start == 0 || track.artist[..*start].ends_with(", "))
+                        && (end == track.artist.len() || track.artist[end..].starts_with(", "))
+                })
+                .map(|start| (start, index))
+        })
+        .min_by_key(|(start, _)| *start)
+}
+
 impl RenderOnce for TrackRow {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = self.palette;
@@ -203,6 +314,48 @@ impl RenderOnce for TrackRow {
             palette.selection
         } else {
             palette.surface
+        };
+        let artists = self.artist_line(window);
+        let album_text = ellipsized_line()
+            .text_size(tokens::BODY_TEXT)
+            .text_color(rgb(palette.text))
+            .child(self.track.album.clone())
+            .into_any_element();
+        let album = self
+            .track
+            .album_ref
+            .as_ref()
+            .filter(|album| album.source_id.is_some());
+        let album_label = if self.compact {
+            album_text
+        } else if album.is_some() {
+            self.navigation_link(
+                ("track-album", index),
+                TrackNavigation::Album,
+                album_text,
+                window,
+                true,
+            )
+        } else {
+            album_text
+        };
+        let artwork = components::artwork(
+            palette,
+            &self.image_cache,
+            self.track.artwork_url.as_deref(),
+            tokens::TRACK_ARTWORK,
+            CadenceIcon::MusicNote,
+        );
+        let artwork = if album.is_some() {
+            self.navigation_link(
+                ("track-artwork", index),
+                TrackNavigation::Album,
+                artwork,
+                window,
+                self.compact,
+            )
+        } else {
+            artwork
         };
         let row = components::row_button(palette, ("spotify-track", index))
             .test_support()
@@ -262,13 +415,7 @@ impl RenderOnce for TrackRow {
                     .flex()
                     .items_center()
                     .gap_2p5()
-                    .child(components::artwork(
-                        palette,
-                        &self.image_cache,
-                        self.track.artwork_url.as_deref(),
-                        tokens::TRACK_ARTWORK,
-                        CadenceIcon::MusicNote,
-                    ))
+                    .child(div().flex_none().child(artwork))
                     .child(
                         // Cross-axis stretch (the default) hands each line a
                         // definite width, which text layout needs to ellipsize
@@ -286,21 +433,21 @@ impl RenderOnce for TrackRow {
                                     .child(self.track.title.clone()),
                             )
                             .child(
-                                ellipsized_line()
+                                div()
                                     .text_xs()
                                     .text_color(rgb(palette.text_muted))
-                                    .child(self.track.artist.clone()),
+                                    .child(artists),
                             ),
                     ),
             )
             .when(!self.compact, |row| {
                 row.child(
-                    div().flex_1().min_w_0().flex().flex_col().child(
-                        ellipsized_line()
-                            .text_size(tokens::BODY_TEXT)
-                            .text_color(rgb(palette.text))
-                            .child(self.track.album.clone()),
-                    ),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(album_label),
                 )
             })
             .child(
@@ -332,6 +479,8 @@ impl RenderOnce for TrackRow {
             )
             .child(
                 div()
+                    .id(("track-duration", index))
+                    .test_support()
                     .w(TIME_COLUMN_WIDTH)
                     .flex_none()
                     .flex()
@@ -467,5 +616,27 @@ impl RenderOnce for PlaylistRow {
                     ),
             )
             .when_some(self.on_open, |row, handler| row.on_click(handler))
+    }
+}
+
+#[cfg(test)]
+mod credit_tests {
+    use super::*;
+    #[test]
+    fn credit_matching_preserves_missing_references_and_names_with_commas() {
+        let mut track = test_support::track(0);
+        track.artist = "Tiffany Day, Tyler, The Creator, glaive".into();
+        track.artists = ["glaive", "Tyler, The Creator"]
+            .into_iter()
+            .map(|name| model::ArtistRef {
+                name: name.into(),
+                source_id: Some(name.into()),
+                spotify_uri: None,
+            })
+            .collect();
+        assert_eq!(next_artist_credit(&track, 0), Some((13, 1)));
+        assert_eq!(next_artist_credit(&track, 31), Some((33, 0)));
+        track.artist = "glaive fan club".into();
+        assert_eq!(next_artist_credit(&track, 0), None);
     }
 }

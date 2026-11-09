@@ -9,6 +9,8 @@ enum Scene {
     ArtistLoading,
     ArtistDiscography,
     TrackHover,
+    TrackCredits,
+    PinnedPlaylist,
     TrackMenu,
     AlbumTint,
     PlaylistTail,
@@ -51,6 +53,8 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("artist-docked", Scene::ArtistDiscography),
         ("artist-loading", Scene::ArtistLoading),
         ("track-hover", Scene::TrackHover),
+        ("track-credits", Scene::TrackCredits),
+        ("playlist-pinned", Scene::PinnedPlaylist),
         ("track-menu", Scene::TrackMenu),
         ("album-tint", Scene::AlbumTint),
         ("playlist-tail", Scene::PlaylistTail),
@@ -253,11 +257,22 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     respond.send(Ok((artist, tracks.clone(), albums))).unwrap();
                     services::AppServices::player(cx).update(cx, |player, cx| { player.handle_backend_event(BackendEvent::PlaybackSnapshotLoaded { current: tracks[0].clone(), next: tracks[1..].to_vec(), position_ms: 60_000 }, cx); });
                 }
+                Scene::TrackCredits => {
+                    let mut full = super::interactions::credited_track();
+                    full.title = "Multiple credited artists".into();
+                    full.album = "Grease".into();
+                    let mut partial = track(1);
+                    partial.title = "Credits with incomplete older metadata".into();
+                    partial.artist = "Tiffany Day, glaive".into();
+                    partial.artists = vec![model::ArtistRef { name: "glaive".into(), source_id: Some("glaive-id".into()), spotify_uri: None }];
+                    partial.album_ref = full.album_ref.clone();
+                    workspace.library.update(cx, |library, cx| { library.handle_backend_event(BackendEvent::LibraryLoaded { generation: 0, liked_tracks: vec![full, partial], playlists: vec![] }, 0, cx); });
+                }
                 Scene::PlaylistsLoading => {
                     workspace.library.update(cx, |library, cx| library.clear(cx));
                     workspace.navigate(Route::Playlists, cx);
                 }
-                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed | Scene::PlaylistTooltip | Scene::PlaylistTail => {
+                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed | Scene::PlaylistTooltip | Scene::PlaylistTail | Scene::PinnedPlaylist => {
                     let artwork_url = "https://fixtures.invalid/sidebar-cover.png";
                     let cover = image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([45 + (x*2) as u8, 50 + (y*2) as u8, 160, 255]));
                     services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(artwork_url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(cover)]))));
@@ -271,7 +286,11 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                         owner: "Cadence Ensemble".into(), track_count: 1000, artwork_url: (index % 2 == 0).then(|| artwork_url.into()),
                     }).collect();
                     let selected = playlists[0].clone();
-                    workspace.library.update(cx, |library, cx| { library.handle_backend_event(BackendEvent::LibraryLoaded { generation: 0, liked_tracks: vec![track(0)], playlists }, 0, cx); });
+                    let pins = if matches!(scene, Scene::PinnedPlaylist) { vec![playlists[1].clone(), playlists[3].clone()] } else { vec![] };
+                    workspace.library.update(cx, |library, cx| {
+                        library.handle_backend_event(BackendEvent::LibraryLoaded { generation: 0, liked_tracks: vec![track(0)], playlists }, 0, cx);
+                        if !pins.is_empty() { library.handle_backend_event(BackendEvent::LocalStateLoaded { favorites: vec![], pinned_playlists: pins, recently_played: vec![] }, 0, cx); }
+                    });
                     if matches!(scene, Scene::PlaylistCollapsed | Scene::PlaylistTooltip) { workspace.sidebar.update(cx, |sidebar, cx| sidebar.set_collapsed(true, cx)); }
                     workspace.load_playlist(selected, cx);
                     workspace.navigate(Route::Playlist, cx);
@@ -319,6 +338,52 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         .expect("activate fixture window");
     settle(&mut cx, handle.into());
     match scene {
+        Scene::TrackCredits => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window
+                    .within(("spotify-track", 0usize))
+                    .hover(("track-artist", 1usize), cx)
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
+        Scene::PinnedPlaylist => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.click(("sidebar-playlist", 2usize), cx)
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+            let BackendCommand::LoadPlaylist { respond, .. } = backend.commands.try_recv().unwrap()
+            else {
+                panic!("recent playlist")
+            };
+            respond
+                .send(Ok(model::PlaylistTrackPage {
+                    tracks: (0..15).map(track).collect(),
+                    source_offsets: vec![],
+                    next_offset: Some(15),
+                    total: 1000,
+                }))
+                .unwrap();
+            settle(&mut cx, handle.into());
+            cx.update_window(handle.into(), |_, window, cx| {
+                let bounds = window.find("track-scroll-viewport").bounds();
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position: point(bounds.right() - px(8.), bounds.top() + px(8.)),
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                assert!(
+                    window.find(("pinned-playlist", 3usize)).bounds().top()
+                        < window.find(("sidebar-playlist", 2usize)).bounds().top()
+                );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
         Scene::SettingsCache => {
             cx.update_window(handle.into(), |_, window, cx| {
                 let position = window.find("settings-page").bounds().center();
@@ -668,6 +733,22 @@ pub(crate) fn run() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
+    if std::env::args().any(|argument| argument == "--navigation-preview") {
+        let previews = artifacts.with_file_name("navigation-previews");
+        std::fs::create_dir_all(&previews).unwrap();
+        for (name, scene, width) in [
+            ("credits", Scene::TrackCredits, 1280.),
+            ("credits-compact", Scene::TrackCredits, 900.),
+            ("pins-gutter", Scene::PinnedPlaylist, 1280.),
+            ("pins-gutter-compact", Scene::PinnedPlaylist, 900.),
+        ] {
+            let image = capture(scene, ThemePreference::Dark, width);
+            let repeated = capture(scene, ThemePreference::Dark, width);
+            assert!(compare(name, &image, &repeated, &previews));
+            save_artifact(&image, &previews.join(format!("{name}.png")));
+        }
+        return;
+    }
     if std::env::args().any(|argument| argument == "--artist-scroll-preview") {
         let previews = artifacts.with_file_name("artist-scroll-previews");
         std::fs::create_dir_all(&previews).unwrap();

@@ -25,16 +25,20 @@ struct Fixture {
 
 impl Fixture {
     fn at_width(width: f32) -> Self {
-        let mut fixture = Self::new(false);
-        fixture
-            .cx
-            .update_window(fixture.window.into(), |_, window, cx| {
-                window.resize(size(px(width), px(820.)));
-                let _ = cx;
-            })
-            .expect("fixture window");
-        settle(&mut fixture.cx, fixture.window.into());
-        fixture
+        // Set initial bounds before child views measure responsive columns.
+        let mut cx = HeadlessAppContext::with_asset_source(
+            Arc::new(NoopTextSystem),
+            Arc::new(assets::CadenceAssets),
+        );
+        let backend = cx.update(|cx| initialize(cx, ThemePreference::Dark));
+        let (window, workspace) = workspace(&mut cx, width, 820.);
+        settle(&mut cx, window.into());
+        Self {
+            cx,
+            window,
+            workspace: Some(workspace.downgrade()),
+            backend,
+        }
     }
 
     fn new(settings: bool) -> Self {
@@ -298,7 +302,7 @@ impl Fixture {
         self.update(|window, _| window.find(id).focused() == Some(true))
     }
 
-    fn tab_to(&mut self, id: &'static str) {
+    fn tab_to(&mut self, id: impl Into<gpui_kit::ElementId>) {
         tab_to(&mut self.cx, self.window.into(), id);
     }
 }
@@ -676,7 +680,7 @@ fn artist_ref(name: &str, source_id: &str) -> model::ArtistRef {
 }
 
 /// A track Spotify fully described, with two credited artists and an album.
-fn credited_track() -> model::Track {
+pub(super) fn credited_track() -> model::Track {
     let mut track = track(0);
     track.artist = "Frankie Valli, The Four Seasons".into();
     track.artists = vec![
@@ -690,6 +694,398 @@ fn credited_track() -> model::Track {
         artwork_url: None,
     });
     track
+}
+
+#[test]
+fn shared_rows_open_each_artist_and_album_from_every_library_collection() {
+    for nav in ["nav-library", "nav-favorites", "nav-recent"] {
+        for artist in [Some(0usize), Some(1), None] {
+            let mut fixture = Fixture::new(false);
+            fixture.update(|_, cx| {
+                services::AppServices::library(cx).update(cx, |library, cx| {
+                    library.handle_backend_event(
+                        BackendEvent::LibraryLoaded {
+                            generation: 0,
+                            liked_tracks: vec![credited_track()],
+                            playlists: vec![],
+                        },
+                        0,
+                        cx,
+                    );
+                    library.handle_backend_event(
+                        BackendEvent::LocalStateLoaded {
+                            favorites: vec![credited_track()],
+                            pinned_playlists: vec![],
+                            recently_played: vec![credited_track()],
+                        },
+                        0,
+                        cx,
+                    );
+                });
+            });
+            fixture.update(|window, cx| window.click(nav, cx));
+            fixture.update(|window, cx| {
+                let mut row = window.within(("spotify-track", 0usize));
+                if let Some(artist) = artist {
+                    assert_eq!(
+                        row.find(("track-artist", artist)).role(),
+                        Some(gpui_kit::Role::Link)
+                    );
+                    row.click(("track-artist", artist), cx);
+                } else {
+                    row.click(("track-album", 0usize), cx);
+                }
+            });
+            if let Some(artist) = artist {
+                assert_eq!(
+                    fixture.requested_artist(),
+                    if artist == 0 {
+                        "artist-valli"
+                    } else {
+                        "artist-seasons"
+                    }
+                );
+            } else {
+                assert_eq!(fixture.requested_album(), "album-grease");
+            }
+            fixture.no_commands();
+        }
+    }
+}
+
+#[test]
+fn row_artwork_opens_album_and_plain_legacy_credits_stay_plain() {
+    let mut fixture = Fixture::at_width(900.);
+    fixture.update(|window, _| {
+        assert!(window.try_find(("track-artist", 0usize)).is_none());
+        assert!(window.try_find(("track-artwork", 0usize)).is_none());
+    });
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: vec![credited_track()],
+                    playlists: vec![],
+                },
+                0,
+                cx,
+            );
+        })
+    });
+    fixture.update(|window, cx| {
+        assert!(window.try_find(("track-album", 0usize)).is_none());
+        window.click(("track-artwork", 0usize), cx);
+    });
+    assert_eq!(fixture.requested_album(), "album-grease");
+    fixture.no_commands();
+}
+
+#[test]
+fn track_artist_links_work_inside_an_album_without_playing() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.open_album(credited_track().album_ref.unwrap(), Route::LikedSongs, cx);
+        })
+    });
+    let BackendCommand::LoadAlbum { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("album request")
+    };
+    respond
+        .send(Ok((
+            model::Album {
+                provider: model::Provider::Spotify,
+                source_id: "album-grease".into(),
+                spotify_uri: None,
+                name: "Grease".into(),
+                artists: credited_track().artists,
+                release_date: None,
+                artwork_url: None,
+                track_count: Some(1),
+            },
+            vec![credited_track()],
+        )))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| {
+        window
+            .within(("spotify-track", 0usize))
+            .click(("track-artist", 1usize), cx)
+    });
+    assert_eq!(fixture.requested_artist(), "artist-seasons");
+    fixture.no_commands();
+}
+
+#[test]
+fn search_track_album_links_use_loaded_metadata_without_searching_again() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        window.click("search-input", cx);
+        window.input("Grease", cx);
+        window.press("enter", cx);
+    });
+    let BackendCommand::SearchCatalog { respond, .. } =
+        fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("search")
+    };
+    respond
+        .send(Ok(model::CatalogSearchResults {
+            artists: vec![],
+            tracks: vec![credited_track()],
+            playlists: vec![],
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| window.click(("track-album", 0usize), cx));
+    assert_eq!(fixture.requested_album(), "album-grease");
+    fixture.no_commands();
+}
+
+#[test]
+fn track_links_work_from_keyboard_and_queue_without_playback_commands() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|_, cx| {
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: vec![credited_track()],
+                    playlists: vec![],
+                },
+                0,
+                cx,
+            );
+        })
+    });
+    fixture.tab_to(("track-artist", 1usize));
+    fixture.press("enter");
+    assert_eq!(fixture.requested_artist(), "artist-seasons");
+    fixture.no_commands();
+
+    let mut next = credited_track();
+    next.source_id = "linked-next".into();
+    fixture.player_event(BackendEvent::PlaybackSnapshotLoaded {
+        current: track(0),
+        next: vec![next],
+        position_ms: 0,
+    });
+    fixture.update(|window, cx| window.click("queue-toggle", cx));
+    fixture.update(|window, cx| {
+        window
+            .within("queue-drawer")
+            .within(("spotify-track", 1usize))
+            .click(("track-artist", 0usize), cx)
+    });
+    assert_eq!(fixture.requested_artist(), "artist-valli");
+    fixture.no_commands();
+}
+
+#[test]
+fn loaded_playlist_row_opens_album_without_fetching_more_tracks() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.load_playlist(paged_playlist(), cx);
+            workspace.navigate(Route::Playlist, cx);
+        })
+    });
+    let BackendCommand::LoadPlaylist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("playlist")
+    };
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            tracks: vec![credited_track()],
+            source_offsets: vec![],
+            next_offset: None,
+            total: 1,
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| window.click(("track-album", 0usize), cx));
+    assert_eq!(fixture.requested_album(), "album-grease");
+    fixture.no_commands();
+}
+
+#[test]
+fn stale_track_row_input_cannot_favorite_a_replacement_track() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| {
+        let position = window.find(("spotify-favorite", 1usize)).bounds().center();
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: vec![track(0), track(2)],
+                    playlists: vec![],
+                },
+                0,
+                cx,
+            );
+        });
+        // Send queued input against the completed frame, without the test
+        // click helper's intervening redraws of the replacement collection.
+        window.dispatch_event(
+            MouseDownEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    if let Ok(command) = fixture.backend.commands.try_recv() {
+        let BackendCommand::SetFavorite { track: target, .. } = command else {
+            panic!("only a favorite write is allowed")
+        };
+        assert_eq!(
+            target.source_id,
+            track(1).source_id,
+            "queued input must not target the replacement track"
+        );
+    }
+    fixture.no_commands();
+}
+
+#[test]
+fn pinned_playlists_stay_above_recent_items_and_keep_their_order() {
+    let mut fixture = Fixture::new(false);
+    let playlists: Vec<_> = (0..6)
+        .map(|i| model::Playlist {
+            source_id: format!("playlist-{i}"),
+            ..paged_playlist()
+        })
+        .collect();
+    fixture.update(|_, cx| {
+        cx.set_reduce_motion(true);
+        services::AppServices::library(cx).update(cx, |library, cx| {
+            library.handle_backend_event(
+                BackendEvent::LibraryLoaded {
+                    generation: 0,
+                    liked_tracks: vec![track(0)],
+                    playlists: playlists.clone(),
+                },
+                0,
+                cx,
+            );
+            library.handle_backend_event(
+                BackendEvent::LocalStateLoaded {
+                    favorites: vec![],
+                    pinned_playlists: vec![playlists[1].clone(), playlists[3].clone()],
+                    recently_played: vec![],
+                },
+                0,
+                cx,
+            );
+        });
+    });
+    for clicked in [4usize, 2, 1, 3, 5] {
+        fixture.update(|window, cx| {
+            window.click(
+                (
+                    if clicked == 1 || clicked == 3 {
+                        "pinned-playlist"
+                    } else {
+                        "sidebar-playlist"
+                    },
+                    clicked,
+                ),
+                cx,
+            )
+        });
+        let BackendCommand::LoadPlaylist { .. } = fixture.backend.commands.try_recv().unwrap()
+        else {
+            panic!("playlist navigation")
+        };
+        fixture.update(|window, _| {
+            let first = window.find(("pinned-playlist", 1usize)).bounds();
+            let second = window.find(("pinned-playlist", 3usize)).bounds();
+            assert!(first.top() < second.top());
+            for index in [0usize, 2, 4, 5] {
+                assert!(second.top() < window.find(("sidebar-playlist", index)).bounds().top());
+            }
+        });
+    }
+    fixture.no_commands();
+}
+
+#[test]
+fn scrollbar_gutter_keeps_duration_columns_stable_on_hover_and_drag() {
+    for (width, zoom) in [(1280., 100), (900., 125)] {
+        let mut fixture = Fixture::at_width(width);
+        fixture.update(|_, cx| {
+            appearance::Appearance::set_ui_zoom(
+                crate::storage::UiZoom::from_percent(zoom).unwrap(),
+                cx,
+            )
+            .unwrap();
+            services::AppServices::library(cx).update(cx, |library, cx| {
+                library.handle_backend_event(
+                    BackendEvent::LibraryLoaded {
+                        generation: 0,
+                        liked_tracks: (0..200).map(track).collect(),
+                        playlists: vec![],
+                    },
+                    0,
+                    cx,
+                );
+            });
+        });
+        let (duration, viewport) = fixture.update(|window, _| {
+            (
+                window.find(("track-duration", 0usize)).bounds(),
+                window.find("track-scroll-viewport").bounds(),
+            )
+        });
+        assert!(duration.right() <= viewport.right() - px(16.));
+        fixture.update(|window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: point(viewport.right() - px(8.), duration.center().y),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            )
+        });
+        fixture.update(|window, _| {
+            assert_eq!(window.find(("track-duration", 0usize)).bounds(), duration)
+        });
+        fixture.update(|window, cx| {
+            window.drag(
+                point(viewport.right() - px(8.), viewport.top() + px(8.)),
+                point(viewport.right() - px(8.), viewport.center().y),
+                cx,
+            )
+        });
+        fixture.update(|window, _| {
+            let visible: Vec<_> = (0..200usize)
+                .filter_map(|i| window.try_find(("track-duration", i)))
+                .collect();
+            assert!(!visible.is_empty());
+            for item in visible {
+                assert_eq!(item.bounds().right(), duration.right());
+            }
+        });
+        fixture.no_commands();
+    }
 }
 
 #[test]

@@ -135,11 +135,16 @@ pub(super) fn press_key(cx: &mut HeadlessAppContext, window: AnyWindowHandle, ke
 }
 
 /// Presses Tab until `id` has keyboard focus, as a keyboard user would.
-pub(super) fn tab_to(cx: &mut HeadlessAppContext, window: AnyWindowHandle, id: &'static str) {
+pub(super) fn tab_to(
+    cx: &mut HeadlessAppContext,
+    window: AnyWindowHandle,
+    id: impl Into<ElementId>,
+) {
+    let id = id.into();
     for _ in 0..MAX_TAB_STOPS {
         let focused = cx
             .update_window(window, |_, window, _| {
-                window.find(id).focused() == Some(true)
+                window.find(id.clone()).focused() == Some(true)
             })
             .expect("fixture focus");
         if focused {
@@ -147,5 +152,5 @@ pub(super) fn tab_to(cx: &mut HeadlessAppContext, window: AnyWindowHandle, id: &
         }
         press_key(cx, window, "tab");
     }
-    panic!("Tab never reached {id}");
+    panic!("Tab never reached {id:?}");
 }
