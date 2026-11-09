@@ -16,6 +16,7 @@ pub(super) enum ToolbarEvent {
 /// The bar above the page: search on the left, account on the right.
 pub(super) struct Toolbar {
     search_input: Entity<InputState>,
+    pub(super) artist_header: Option<Entity<artist_header::ArtistHeader>>,
     menu_open: bool,
     session: Entity<session::Session>,
     player: Entity<player::Player>,
@@ -69,6 +70,7 @@ impl Toolbar {
             update_version,
             update_generation: 0,
             search_input,
+            artist_header: None,
             menu_open: false,
             session: services::AppServices::session(cx),
             player: services::AppServices::player(cx),
@@ -125,7 +127,9 @@ impl Toolbar {
         window: &Window,
         cx: &App,
     ) -> impl IntoElement {
-        let width = if compact {
+        let width = if self.route == Route::Artist {
+            Rems(if compact { 13. } else { 23. })
+        } else if compact {
             tokens::COMPACT_SEARCH_FIELD_WIDTH
         } else {
             tokens::SEARCH_FIELD_WIDTH
@@ -134,6 +138,7 @@ impl Toolbar {
             .id("search-field")
             .test_support()
             .w(width)
+            .min_w_0()
             .h_10()
             .justify_start()
             .gap_2p5()
@@ -310,6 +315,9 @@ impl Render for Toolbar {
                     .flex()
                     .items_center()
                     .gap_2p5()
+                    .when(self.route == Route::Artist, |group| {
+                        group.flex_1().min_w_0()
+                    })
                     .when_some(self.back_target, |group, origin| {
                         group.child(
                             components::icon_button(
@@ -343,6 +351,42 @@ impl Render for Toolbar {
             .child(
                 div()
                     .relative()
+                    .when(self.route == Route::Artist, |anchor| {
+                        anchor.ml(Rems(13.75)).flex_none()
+                    })
+                    .when(self.route == Route::Artist, |anchor| {
+                        anchor.child(
+                            div()
+                                .absolute()
+                                .right(Rems(3.25))
+                                .top(Rems(0.25))
+                                .w(Rems(10.5))
+                                .h(Rems(2.))
+                                .child(
+                                    gpui_kit::canvas(
+                                        {
+                                            let header = self.artist_header.clone();
+                                            move |bounds, _, cx| {
+                                                if let Some(header) = &header {
+                                                    let header = header.clone();
+                                                    cx.defer(move |cx| {
+                                                        header.update(cx, |header, cx| {
+                                                            if header.target_bounds != Some(bounds)
+                                                            {
+                                                                header.target_bounds = Some(bounds);
+                                                                cx.notify();
+                                                            }
+                                                        });
+                                                    });
+                                                }
+                                            }
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .size_full(),
+                                ),
+                        )
+                    })
                     .child(
                         components::filled_button(palette, "account")
                             .hover(|style| style.opacity(0.9))

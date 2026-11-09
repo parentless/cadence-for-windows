@@ -13,6 +13,7 @@ enum Scene {
     AlbumTint,
     PlaylistTail,
     ReadmeGlaive,
+    ReadmeGlaiveDocked,
     PlaylistsLoading,
     PlaylistTracks,
     PlaylistHover,
@@ -47,6 +48,7 @@ enum Scene {
 fn scenes() -> Vec<(&'static str, Scene)> {
     vec![
         ("artist", Scene::Artist),
+        ("artist-docked", Scene::ArtistDiscography),
         ("artist-loading", Scene::ArtistLoading),
         ("track-hover", Scene::TrackHover),
         ("track-menu", Scene::TrackMenu),
@@ -135,7 +137,9 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         fonts::register(cx).expect("bundled Inter fonts");
     });
     let mut backend = cx.update(|cx| initialize(cx, theme));
-    let height = if matches!(scene, Scene::ReadmeGlaive) {
+    let height = if matches!(scene, Scene::ReadmeGlaiveDocked) {
+        640.
+    } else if matches!(scene, Scene::ReadmeGlaive) {
         960.
     } else {
         820.
@@ -232,7 +236,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     let BackendCommand::LoadAlbum { respond, .. } = backend.commands.try_recv().unwrap() else { panic!() };
                     respond.send(Ok((model::Album { provider: model::Provider::Spotify, source_id: "blue-album".into(), spotify_uri: None, name: "Blue hours".into(), artists: vec![], release_date: Some("2026-01-01".into()), artwork_url: Some(url.into()), track_count: Some(30) }, (0..30).map(track).collect()))).unwrap();
                 }
-                Scene::ReadmeGlaive => {
+                Scene::ReadmeGlaive | Scene::ReadmeGlaiveDocked => {
                     let path = std::env::var("CADENCE_README_FIXTURE").expect("README fixture path");
                     let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
                     let artist: model::Artist = serde_json::from_value(value["artist"].clone()).unwrap();
@@ -332,13 +336,13 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             .unwrap();
             settle(&mut cx, handle.into());
         }
-        Scene::ArtistDiscography => {
+        Scene::ArtistDiscography | Scene::ReadmeGlaiveDocked => {
             cx.update_window(handle.into(), |_, window, cx| {
                 let position = window.find(("spotify-track", 0usize)).bounds().center();
                 window.dispatch_event(
                     gpui_kit::ScrollWheelEvent {
                         position,
-                        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-240.))),
+                        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-450.))),
                         ..Default::default()
                     }
                     .to_platform_input(),
@@ -347,10 +351,8 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             })
             .unwrap();
             settle(&mut cx, handle.into());
-            cx.update_window(handle.into(), |_, window, cx| {
-                window.hover("artist-header", cx)
-            })
-            .unwrap();
+            cx.update_window(handle.into(), |_, window, cx| window.hover("account", cx))
+                .unwrap();
             settle(&mut cx, handle.into());
         }
         Scene::TrackMenu => {
@@ -566,6 +568,33 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     let screenshot = cx
         .capture_screenshot(handle.into())
         .expect("native Metal screenshot");
+    if matches!(
+        scene,
+        Scene::Artist
+            | Scene::ArtistPortrait
+            | Scene::ArtistLandscape
+            | Scene::ArtistZoomLarge
+            | Scene::ReadmeGlaive
+    ) {
+        let seam = cx
+            .update_window(handle.into(), |_, window, _| {
+                window
+                    .find("artist-header")
+                    .bounds()
+                    .to_device_pixels(window.scale_factor())
+            })
+            .unwrap();
+        let bottom: i32 = seam.bottom().into();
+        let left: i32 = seam.left().into();
+        let right: i32 = seam.right().into();
+        for x in (left + 8..right - 8).step_by(31) {
+            assert_eq!(
+                screenshot.get_pixel(x as u32, (bottom - 8) as u32),
+                screenshot.get_pixel(x as u32, (bottom + 1) as u32),
+                "artist backdrop must be solid page colour before the bottom edge"
+            );
+        }
+    }
     if let Scene::QueueFocus { open } = scene {
         let bounds = cx
             .update_window(handle.into(), |_, window, _| {
@@ -639,6 +668,20 @@ pub(crate) fn run() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
+    if std::env::args().any(|argument| argument == "--artist-scroll-preview") {
+        let previews = artifacts.with_file_name("artist-scroll-previews");
+        std::fs::create_dir_all(&previews).unwrap();
+        for (name, scene) in [
+            ("expanded", Scene::ReadmeGlaive),
+            ("docked", Scene::ReadmeGlaiveDocked),
+        ] {
+            let image = capture(scene, ThemePreference::Dark, 1280.);
+            let repeated = capture(scene, ThemePreference::Dark, 1280.);
+            assert!(compare(name, &image, &repeated, &previews));
+            save_artifact(&image, &previews.join(format!("{name}.png")));
+        }
+        return;
+    }
     if std::env::args().any(|argument| argument == "--detail-layout-preview") {
         let previews = artifacts.with_file_name("detail-layout-previews");
         std::fs::create_dir_all(&previews).expect("preview directory");

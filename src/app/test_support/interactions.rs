@@ -1223,6 +1223,7 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
     let mut fixture = Fixture::new(false);
     let workspace = fixture.workspace.clone().unwrap();
     fixture.update(|_, cx| {
+        cx.set_reduce_motion(true);
         workspace.upgrade().unwrap().update(cx, |workspace, cx| {
             workspace.open_artist(artist_ref("Artist", "artist-flow"), Route::LikedSongs, cx);
         });
@@ -1263,7 +1264,7 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
             window.try_find(("artist-album", 399usize)).is_none(),
             "offscreen albums stay virtualized"
         );
-        let position = window.find(("spotify-track", 0usize)).bounds().center();
+        let position = window.find("artist-portrait").bounds().center();
         window.dispatch_event(
             gpui_kit::ScrollWheelEvent {
                 position,
@@ -1274,8 +1275,45 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
             cx,
         );
     });
+    fixture.update(|window, cx| {
+        let position = point(px(700.), px(400.));
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(450.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    fixture.update(|window, cx| {
+        let portrait = window.find("artist-portrait").bounds();
+        assert_eq!(
+            portrait.size.width,
+            gpui_kit::Rems(10.).to_pixels(window.rem_size())
+        );
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position: portrait.center(),
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-450.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
     let visible_album = fixture.update(|window, cx| {
-        let top = window.find("artist-header").bounds().bottom();
+        let top = crate::app::tokens::TOOLBAR_HEIGHT.to_pixels(window.rem_size());
+        let portrait = window.find("artist-portrait").bounds();
+        let search = window.find("search-field").bounds();
+        let account = window.find("account").bounds();
+        assert_eq!(
+            portrait.size.width,
+            gpui_kit::Rems(2.).to_pixels(window.rem_size())
+        );
+        assert!(portrait.left() >= search.right());
+        assert!(window.find("artist-moving-name").bounds().right() <= account.left());
         let index = (0usize..40)
             .find(|index| {
                 window
@@ -2164,6 +2202,7 @@ fn discography_cards_fit_the_available_width_at_narrow_and_wide_sizes() {
         let mut fixture = Fixture::at_width(width);
         let workspace = fixture.workspace.clone().unwrap();
         fixture.update(|_, cx| {
+            cx.set_reduce_motion(true);
             appearance::Appearance::set_ui_zoom(
                 crate::storage::UiZoom::from_percent(zoom).unwrap(),
                 cx,
@@ -2230,6 +2269,15 @@ fn discography_cards_fit_the_available_width_at_narrow_and_wide_sizes() {
             );
         });
         fixture.update(|window, _| {
+            let portrait = window.find("artist-portrait").bounds();
+            assert!(
+                portrait.left() >= window.find("search-field").bounds().right(),
+                "dock must not overlap search at any zoom or sidebar width"
+            );
+            assert!(
+                window.find("artist-moving-name").bounds().right()
+                    <= window.find("account").bounds().left()
+            );
             let mut found = 0;
             for index in 0usize..20 {
                 if let Some(card) = window.try_find(("artist-album", index)) {

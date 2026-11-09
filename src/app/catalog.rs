@@ -505,6 +505,7 @@ pub(super) struct ArtistPage {
     content_state: gpui_kit::ListState,
     content_layout: Option<(usize, usize, usize, Pixels)>,
     content_columns: usize,
+    pub(super) header_motion: Entity<artist_header::ArtistHeader>,
     loaded: bool,
     error: Option<SharedString>,
     loaded_at: Option<SystemTime>,
@@ -519,13 +520,32 @@ impl EventEmitter<PageEvent> for ArtistPage {}
 impl ArtistPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
         let track_list = cx.new(|cx| TrackList::new(cx).with_inline_rows());
+        let header_motion = cx.new(|cx| artist_header::ArtistHeader::new(cx));
+        let content_state = gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.));
+        content_state.set_scroll_handler({
+            let page = cx.weak_entity();
+            move |_, window, cx| {
+                let page = page.clone();
+                let rem = window.rem_size();
+                // Defer until the list releases its internal mutable borrow.
+                // A weak page avoids a ListState -> handler -> ListState cycle.
+                cx.defer(move |cx| {
+                    let _ = page.update(cx, |page, cx| {
+                        let offset = -page.content_state.scroll_px_offset_for_scrollbar().y / rem;
+                        page.header_motion
+                            .update(cx, |header, cx| header.scroll(offset, cx));
+                    });
+                });
+            }
+        });
         Self {
             backend,
             reference: None,
             artist: None,
             tracks: Arc::default(),
             albums: Arc::default(),
-            content_state: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.)),
+            content_state,
+            header_motion,
             content_layout: None,
             content_columns: 1,
             loaded: false,
@@ -566,6 +586,7 @@ impl ArtistPage {
             self.loaded = false;
             self.loaded_at = None;
             self.content_layout = None;
+            self.header_motion.update(cx, |header, cx| header.reset(cx));
         } else if retrying_failure {
             self.loaded = false;
         }
@@ -619,7 +640,32 @@ impl ArtistPage {
 
     /// Popular tracks form one small, naturally sized block. Release rows are
     /// virtualized in the same scroll area, so a large discography stays cheap.
-    fn content_item(&mut self, index: usize, columns: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn content_item(
+        &mut self,
+        index: usize,
+        columns: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if index == 0 {
+            return self.header(window, cx);
+        }
+        if !self.loaded {
+            return div()
+                .px_8()
+                .child(components::list_skeleton(appearance::Appearance::palette(
+                    cx,
+                )))
+                .into_any_element();
+        }
+        if let Some(error) = &self.error {
+            return components::empty_state(
+                appearance::Appearance::palette(cx),
+                format!("Unable to load artist: {error}"),
+            )
+            .into_any_element();
+        }
+        let index = index - 1;
         let heading = |id, title| {
             div()
                 .id(id)
@@ -631,6 +677,7 @@ impl ArtistPage {
         };
         if index == 0 {
             return div()
+                .px_8()
                 .w_full()
                 .flex()
                 .flex_col()
@@ -649,6 +696,7 @@ impl ArtistPage {
         }
         if index == 1 {
             return div()
+                .px_8()
                 .w_full()
                 .pt_6()
                 .pb_3()
@@ -667,6 +715,7 @@ impl ArtistPage {
         let start = (index - 2) * columns;
         let end = (start + columns).min(self.albums.len());
         let mut cards = div()
+            .px_8()
             .h(tokens::ALBUM_CARD_HEIGHT + Rems(0.5))
             .w_full()
             .flex()
@@ -1194,55 +1243,18 @@ impl Render for PlaylistPage {
     }
 }
 
-impl Render for ArtistPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl ArtistPage {
+    fn header(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let palette = appearance::Appearance::palette(cx);
-        let name = self
-            .artist
-            .as_ref()
-            .map(|artist| artist.name.clone())
-            .or_else(|| self.reference.as_ref().map(|artist| artist.name.clone()))
-            .unwrap_or_else(|| SharedString::new_static("Artist"));
         let artwork_url = self
             .artist
             .as_ref()
             .and_then(|artist| artist.artwork_url.clone());
-        let source_id = self
-            .reference
-            .as_ref()
-            .and_then(|artist| artist.source_id.clone())
-            .unwrap_or_default();
         let detail = if self.loaded && self.error.is_none() {
             format!("Spotify artist · {} releases", self.albums.len())
         } else {
             "Spotify artist".to_owned()
         };
-        let tracks = self.tracks.clone();
-        let columns = self.content_columns;
-        let content = if let Some(error) = self.error.as_ref() {
-            components::empty_state(palette, format!("Unable to load artist: {error}"))
-                .into_any_element()
-        } else if !self.loaded {
-            components::list_skeleton(palette).into_any_element()
-        } else {
-            let layout = (tracks.len(), self.albums.len(), columns, window.rem_size());
-            if self.content_layout != Some(layout) {
-                self.content_state
-                    .reset(2 + self.albums.len().div_ceil(columns));
-                self.content_layout = Some(layout);
-            }
-            let list_id = (ElementId::from("artist-popular"), source_id);
-            self.track_list
-                .update(cx, |list, cx| list.show(list_id, tracks, cx));
-            gpui_kit::list(
-                self.content_state.clone(),
-                cx.processor(move |this, index, _, cx| this.content_item(index, columns, cx)),
-            )
-            .flex_1()
-            .min_h_0()
-            .into_any_element()
-        };
-
         let overlay_inset = tokens::TOOLBAR_HEIGHT.to_pixels(window.rem_size());
 
         let backdrop = artwork_url.clone().map(|url| {
@@ -1274,54 +1286,96 @@ impl Render for ArtistPage {
             .child(div().absolute().inset_0().bg(gpui_kit::linear_gradient(
                 180.,
                 gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.05), 0.),
-                gpui_kit::linear_color_stop(rgb(palette.surface), 1.),
+                gpui_kit::linear_color_stop(rgb(palette.surface), 0.82),
             )))
+            // Finish on the exact page fill (also avoids GPU interpolation rounding at the seam).
             .child(
-                page_header()
-                    .relative()
-                    .px_8()
-                    .pt(DETAIL_HEADER_PADDING.to_pixels(window.rem_size()) + overlay_inset)
-                    .items_end()
-                    .child(
-                        div()
-                            .id("artist-portrait")
-                            .test_support()
-                            .size(tokens::ARTIST_ARTWORK.size)
-                            .flex_none()
-                            .child(components::artwork(
-                                palette,
-                                &self.image_cache,
-                                artwork_url.as_deref(),
-                                tokens::ARTIST_ARTWORK,
-                                CadenceIcon::Person,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(components::page_title(palette, name))
-                            .child(components::page_detail(palette, detail)),
-                    ),
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(relative(0.15))
+                    .bg(rgb(palette.surface)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(Rems(13.5))
+                    .bottom(DETAIL_HEADER_PADDING)
+                    .child(components::page_detail(palette, detail)),
             );
+        header.into_any_element()
+    }
+}
+
+impl Render for ArtistPage {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = appearance::Appearance::palette(cx);
+        let name = self
+            .artist
+            .as_ref()
+            .map(|a| a.name.clone())
+            .or_else(|| self.reference.as_ref().map(|a| a.name.clone()))
+            .unwrap_or_else(|| "Artist".into());
+        let artwork = self.artist.as_ref().and_then(|a| a.artwork_url.clone());
+        self.header_motion.update(cx, |header, cx| {
+            if header.name != name || header.artwork != artwork {
+                header.name = name;
+                header.artwork = artwork;
+                cx.notify();
+            }
+        });
+        let columns = self.content_columns;
+        let layout = (
+            self.tracks.len(),
+            self.albums.len(),
+            columns,
+            window.rem_size(),
+        );
+        if self.content_layout != Some(layout) {
+            self.content_state
+                .reset(if self.loaded && self.error.is_none() {
+                    3 + self.albums.len().div_ceil(columns)
+                } else {
+                    2
+                });
+            self.content_layout = Some(layout);
+            self.header_motion.update(cx, |header, cx| header.reset(cx));
+        }
+        let source_id = self
+            .reference
+            .as_ref()
+            .and_then(|a| a.source_id.clone())
+            .unwrap_or_default();
+        self.track_list.update(cx, |list, cx| {
+            list.show(
+                (ElementId::from("artist-popular"), source_id),
+                self.tracks.clone(),
+                cx,
+            )
+        });
+        let content = gpui_kit::list(
+            self.content_state.clone(),
+            cx.processor(move |this, index, window, cx| {
+                this.content_item(index, columns, window, cx)
+            }),
+        )
+        .flex_1()
+        .min_h_0();
         div()
             .id("artist-page")
+            .relative()
             .size_full()
             .min_h_0()
             .flex()
             .flex_col()
             .bg(rgb(palette.surface))
             .text_color(rgb(palette.text))
-            .child(header)
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .px_8()
-                    .pb_8()
                     .relative()
                     .flex()
                     .flex_col()
@@ -1332,7 +1386,22 @@ impl Render for ArtistPage {
                         gpui_kit::canvas(
                             {
                                 let page = cx.weak_entity();
+                                let self_header = self.header_motion.clone();
                                 move |bounds, window, cx| {
+                                    let header = self_header.clone();
+                                    let origin = bounds.origin;
+                                    let width = bounds.size.width;
+                                    cx.defer(move |cx| {
+                                        header.update(cx, |header, cx| {
+                                            if header.origin != origin
+                                                || header.viewport_width != width
+                                            {
+                                                header.origin = origin;
+                                                header.viewport_width = width;
+                                                cx.notify();
+                                            }
+                                        });
+                                    });
                                     let gap = Rems(0.5).to_pixels(window.rem_size());
                                     let stride = (tokens::ALBUM_CARD_ARTWORK.size + Rems(1.5))
                                         .to_pixels(window.rem_size());
@@ -1360,6 +1429,7 @@ impl Render for ArtistPage {
                         .size_full(),
                     ),
             )
+            .child(self.header_motion.clone())
     }
 }
 

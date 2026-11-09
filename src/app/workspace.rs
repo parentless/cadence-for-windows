@@ -171,6 +171,8 @@ impl Workspace {
             ),
         );
         let toolbar = cx.new(|cx| chrome::Toolbar::new(window, cx));
+        let artist_header = artist.read(cx).header_motion.clone();
+        toolbar.update(cx, |toolbar, _| toolbar.artist_header = Some(artist_header));
         subscriptions.push(cx.subscribe(
             &toolbar,
             |this, _, event: &ToolbarEvent, cx| match event {
