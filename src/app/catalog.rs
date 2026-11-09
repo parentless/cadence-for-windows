@@ -1228,11 +1228,19 @@ impl Render for ArtistPage {
             "Spotify artist".to_owned()
         };
         let tracks = self.tracks.clone();
-        let columns = if is_compact_content_layout(window) {
+        // Reserve the widest sidebar to remain safe throughout its animation,
+        // and fit fixed-width cards without stretching their hover surfaces.
+        let available = window.viewport_size().width
+            - (EXPANDED_SIDEBAR_WIDTH + Rems(4.)).to_pixels(window.rem_size());
+        let stride = (tokens::ALBUM_CARD_ARTWORK.size + Rems(1.5)).to_pixels(window.rem_size());
+        let fits = ((available + Rems(0.5).to_pixels(window.rem_size())) / stride)
+            .floor()
+            .max(1.) as usize;
+        let columns = fits.min(if is_compact_content_layout(window) {
             3
         } else {
             4
-        };
+        });
         let content = if let Some(error) = self.error.as_ref() {
             components::empty_state(palette, format!("Unable to load artist: {error}"))
                 .into_any_element()

@@ -2130,3 +2130,81 @@ fn playlist_play_skips_unavailable_start_pages_without_loading_the_whole_list() 
     assert_eq!((tracks, index, next_offset), (vec![track(2)], 0, Some(30)));
     fixture.no_commands();
 }
+
+#[test]
+fn discography_cards_stay_inside_a_narrow_zoomed_viewport() {
+    let mut fixture = Fixture::at_width(900.);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        appearance::Appearance::set_ui_zoom(crate::storage::UiZoom::from_percent(125).unwrap(), cx)
+            .unwrap();
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.open_artist(
+                model::ArtistRef {
+                    name: "Artist".into(),
+                    source_id: Some("artist".into()),
+                    spotify_uri: None,
+                },
+                Route::LikedSongs,
+                cx,
+            )
+        });
+    });
+    let BackendCommand::LoadArtist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    respond
+        .send(Ok((
+            model::Artist {
+                provider: model::Provider::Spotify,
+                name: "Artist".into(),
+                source_id: "artist".into(),
+                spotify_uri: None,
+                artwork_url: None,
+            },
+            (0..3).map(track).collect(),
+            (0..20)
+                .map(|i| model::Album {
+                    provider: model::Provider::Spotify,
+                    source_id: format!("album-{i}"),
+                    name: format!("Album {i}").into(),
+                    spotify_uri: None,
+                    artwork_url: None,
+                    artists: vec![],
+                    release_date: None,
+                    track_count: None,
+                })
+                .collect(),
+        )))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, cx| {
+        let position = window.find(("spotify-track", 1usize)).bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-600.))),
+                modifiers: Default::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    fixture.update(|window, _| {
+        let mut found = 0;
+        for index in 0usize..20 {
+            if let Some(card) = window.try_find(("artist-album", index)) {
+                assert!(
+                    card.bounds().right()
+                        <= window.viewport_size().width
+                            - gpui_kit::Rems(2.).to_pixels(window.rem_size())
+                );
+                found += 1;
+            }
+        }
+        assert!(found >= 2);
+    });
+    fixture.no_commands();
+}
