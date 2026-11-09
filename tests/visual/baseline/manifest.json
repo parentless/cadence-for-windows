@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.10",
+    "cadence": "0.8.11",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "5eae83eb3bd6974425c2c96c8c737c4b00261b68",
-    "lockfile_sha256": "fe57975ff434e17e79653261713da951e06dfa2d857a1a1601084a2e7169ec67"
+    "revision": "e81c889884616536034460f39bec2f1f3c0109be",
+    "lockfile_sha256": "7bb9a9b43e7fdd163b70f606cc5db99a0e047e900d895f3e4ba281172c5ccc07"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42652407460",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42660147339",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,20 +57,21 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.10",
+      "cadence": "0.8.11",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "5eae83eb3bd6974425c2c96c8c737c4b00261b68",
-      "lockfile_sha256": "fe57975ff434e17e79653261713da951e06dfa2d857a1a1601084a2e7169ec67"
+      "revision": "e81c889884616536034460f39bec2f1f3c0109be",
+      "lockfile_sha256": "7bb9a9b43e7fdd163b70f606cc5db99a0e047e900d895f3e4ba281172c5ccc07"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42652407460"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42660147339"
   },
   "reviewed_changes": [
-    "All shared track rows expose artist and album navigation using loaded references; individual collaborators remain separate links and partial legacy credits retain their original text",
-    "Track scrollbars occupy a permanent 16-point gutter outside the rows; headers share the same inset and durations do not shift or overlap the thumb",
-    "Pinned playlists form a stable prefix; recency promotion and its existing bounded animation operate only within the unpinned suffix",
-    "Pin ordering is cached across unchanged snapshots, per-row pin detection is constant-time, and navigation/favorite metadata is copied only on activation with stable track identity guards",
-    "Eight new references cover artist/album links and active unpinned playlists beneath pins with a hovered scrollbar, in both appearances and widths",
-    "All 144 captures repeat exactly on macOS 15; the approved scrolling artist header and seamless backdrop fade remain intact"
+    "All track rows retain a permanent vertical gap around rounded hover/selection fills; ordinary virtualized rows retain their existing stride and label/artwork centers",
+    "Artist Popular rows use a smaller constant stride; only this section becomes denser and discography follows naturally",
+    "Artist layouts preserve logical release position when zoom, column count or loaded metadata changes; initial loading still replaces the skeleton normally",
+    "Discrete wheel steps use one fixed-size per-window accumulator with 80 ms settling, preserving native line distance and bypassing precise input and reduced motion; no idle frame loop",
+    "Stable artist/header geometry avoids deferred no-op updates; row menu IDs share existing track identity instead of allocating formatted strings on repaint",
+    "Spotify Popular uses the ranked endpoint where accessible, with a once-per-session denied-access probe and existing search fallback; no private scraping or background polling",
+    "All 144 references repeat exactly on macOS 15; linked credits, sidebar pin order, scrollbar gutters, header docking and seamless backdrop fade remain intact"
   ]
 }
