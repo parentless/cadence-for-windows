@@ -1316,16 +1316,9 @@ impl ArtistPage {
             .to_pixels(window.rem_size())
             + overlay_inset;
         let backdrop_height = header_height + Rems(2.875).to_pixels(window.rem_size());
-        // Static gradient bands approximate the approved eased fade. The header
-        // and Popular share one virtual item, so the short tail cannot be culled early.
-        let stops = [
-            (0.50, 0.),
-            (0.62, 0.067),
-            (0.75, 0.467),
-            (0.87, 0.8),
-            (0.95, 0.933),
-            (1., 1.),
-        ];
+        // One full-size gradient avoids joins between separately rasterized
+        // bands at fractional Windows DPI/zoom. Finish early on the exact page
+        // colour so the image edge needs no separate seam-covering strip.
         let background = div()
             .id("artist-backdrop")
             .test_support()
@@ -1337,27 +1330,19 @@ impl ArtistPage {
             .overflow_hidden()
             .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
             .child(div().absolute().inset_0().bg(gpui_kit::rgba(0x10101455)))
-            .children(stops.windows(2).map(|pair| {
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(backdrop_height * pair[0].0)
-                    .h(backdrop_height * (pair[1].0 - pair[0].0))
-                    .bg(gpui_kit::linear_gradient(
-                        180.,
-                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(pair[0].1), 0.),
-                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(pair[1].1), 1.),
-                    ))
-            }))
             .child(
                 div()
                     .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .h(px(2.))
-                    .bg(rgb(palette.surface)),
+                    .inset_0()
+                    // The same quad ends on the exact page fill, including
+                    // renderers that round gradient colours by one shade.
+                    .border_b_2()
+                    .border_color(rgb(palette.surface))
+                    .bg(gpui_kit::linear_gradient(
+                        180.,
+                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.), 0.58),
+                        gpui_kit::linear_color_stop(rgb(palette.surface), 0.96),
+                    )),
             );
         let header = div()
             .id("artist-header")

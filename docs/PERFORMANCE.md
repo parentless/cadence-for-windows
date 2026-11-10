@@ -152,3 +152,16 @@ Regression tests scroll short pages, switch artist, scroll again and click Back.
 These changes have structural bounds and regression coverage. They have not
 been measured with a Windows allocation profiler or a long-running GPU/CPU
 capture, so they do not establish a measured speedup or prove absence of every leak.
+
+
+# Continuous artist fade (0.8.15)
+
+The artist backdrop now uses one full-size native gradient instead of five
+adjacent gradient rectangles and a bottom strip. This removes internal
+rasterization boundaries that can leave a gap or overlap at fractional Windows
+DPI/zoom. The image extent and content spacing are unchanged. The gradient
+starts at 58% of the backdrop height and reaches the page colour at 96%,
+closely approximating the previous opacity curve without internal joins.
+A matching bottom edge in the same quad avoids colour-rounding seams.
+This reduces the fade overlay from six quads to one without adding a texture,
+blur pass, timer or cache.
