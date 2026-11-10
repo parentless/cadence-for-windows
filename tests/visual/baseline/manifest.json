@@ -66,10 +66,11 @@
     "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42764449638"
   },
   "reviewed_changes": [
-    "One continuous full-size artist gradient replaces five adjacent bands and a separate strip, removing internal edges susceptible to fractional Windows DPI/zoom gaps and overlaps",
-    "The single quad has a matching page-colour bottom edge to avoid gradient colour-rounding seams; image extent, identity layout, Popular spacing and discography positions remain unchanged",
+    "One continuous full-size artist gradient replaces five adjacent bands, removing internal edges susceptible to fractional Windows DPI/zoom gaps and overlaps",
+    "The continuous fade has a matching page-colour end fill to avoid gradient colour-rounding seams; image extent, identity layout, Popular spacing and discography positions remain unchanged",
     "Whole-row hover reveals the fixed index play control; the existing hover reference now activates from the row centre rather than the index",
     "Wheel smoothing uses frame-time decay without restarting on each tick, guarantees first-frame response, tolerates small pointer jitter and cancels pending opposite-direction movement; interaction-state tests cover sustained input and settling",
-    "All 160 native references repeat exactly on macOS 15; settings references show 0.8.15"
+    "All 160 native references repeat exactly on macOS 15; settings references show 0.8.15",
+    "Final Windows path uses a borderless gradient and an opaque end fill to avoid enabling outer-edge antialiasing; the captured source and environment remain recorded above"
   ]
 }

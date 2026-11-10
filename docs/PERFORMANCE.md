@@ -156,14 +156,16 @@ capture, so they do not establish a measured speedup or prove absence of every l
 
 # Continuous artist fade (0.8.15)
 
-The artist backdrop now uses one full-size native gradient instead of five
-adjacent gradient rectangles and a bottom strip. This removes internal
+The artist backdrop replaces five adjacent gradient rectangles with one
+full-size native gradient. This removes internal
 rasterization boundaries that can leave a gap or overlap at fractional Windows
 DPI/zoom. The image extent and content spacing are unchanged. The gradient
 starts at 58% of the backdrop height and reaches the page colour at 96%,
 closely approximating the previous opacity curve without internal joins.
-A matching bottom edge in the same quad avoids colour-rounding seams.
-This reduces the fade overlay from six quads to one without adding a texture,
+A page-colour end fill starts after the fade is opaque and avoids colour-rounding seams.
+Both fills remain borderless, preserving the Windows renderer's unrounded fast path
+and avoiding outer-edge antialiasing over the image.
+This reduces the fade overlay from six quads to two without adding a texture,
 blur pass, timer or cache.
 
 

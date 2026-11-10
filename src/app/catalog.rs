@@ -1317,8 +1317,8 @@ impl ArtistPage {
             + overlay_inset;
         let backdrop_height = header_height + Rems(2.875).to_pixels(window.rem_size());
         // One full-size gradient avoids joins between separately rasterized
-        // bands at fractional Windows DPI/zoom. Finish early on the exact page
-        // colour so the image edge needs no separate seam-covering strip.
+        // bands at fractional Windows DPI/zoom. Finish early on page colour;
+        // the borderless end fill below handles renderer colour rounding.
         let background = div()
             .id("artist-backdrop")
             .test_support()
@@ -1330,19 +1330,22 @@ impl ArtistPage {
             .overflow_hidden()
             .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
             .child(div().absolute().inset_0().bg(gpui_kit::rgba(0x10101455)))
+            .child(div().absolute().inset_0().bg(gpui_kit::linear_gradient(
+                180.,
+                gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.), 0.58),
+                gpui_kit::linear_color_stop(rgb(palette.surface), 0.96),
+            )))
+            // Keep both fills unrounded and borderless: Windows can use its
+            // hard-edged quad path instead of antialiasing over the image.
+            // This fill starts after the fade is already opaque.
             .child(
                 div()
                     .absolute()
-                    .inset_0()
-                    // The same quad ends on the exact page fill, including
-                    // renderers that round gradient colours by one shade.
-                    .border_b_2()
-                    .border_color(rgb(palette.surface))
-                    .bg(gpui_kit::linear_gradient(
-                        180.,
-                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.), 0.58),
-                        gpui_kit::linear_color_stop(rgb(palette.surface), 0.96),
-                    )),
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(2.))
+                    .bg(rgb(palette.surface)),
             );
         let header = div()
             .id("artist-header")
