@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.14",
+    "cadence": "0.8.15",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "410b91e4b80941f9c17872c29efaec16b1648bac",
-    "lockfile_sha256": "0056fffdf49e7a9e754fcb27db3d6303f5f85f1c8b71a10c2298d8684a3652cb"
+    "revision": "0a763a5f7eb8e0cfbaf9d57d8770f339fadfd857",
+    "lockfile_sha256": "6df438363d46c369379711aae1bb75a44ed57a81a2f487a5073170a004e4b55d"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42760079094",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42764449638",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,19 +57,19 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.14",
+      "cadence": "0.8.15",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "410b91e4b80941f9c17872c29efaec16b1648bac",
-      "lockfile_sha256": "0056fffdf49e7a9e754fcb27db3d6303f5f85f1c8b71a10c2298d8684a3652cb"
+      "revision": "0a763a5f7eb8e0cfbaf9d57d8770f339fadfd857",
+      "lockfile_sha256": "6df438363d46c369379711aae1bb75a44ed57a81a2f487a5073170a004e4b55d"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42760079094"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42764449638"
   },
   "reviewed_changes": [
-    "Artist backdrop extends 46 logical pixels with static eased gradient bands and an exact page-color seam; header and Popular share a virtual item to keep the tail present during scrolling",
-    "Short artist pages use their actual available scroll distance to reach the identity dock; cross-artist navigation retains a working Back destination",
-    "Artwork requests use physical-size thumbnails, two download/decode workers, a combined compressed-source and decoded-image budget, reusable downloads for upgrades and cancellation on clear",
-    "Audio reuses conversion, channel mapping and resampling buffers; tests compare exact samples with the previous allocating path and verify stable warmed allocations",
-    "All 160 captures repeat exactly on macOS 15; settings references show version 0.8.14"
+    "One continuous full-size artist gradient replaces five adjacent bands and a separate strip, removing internal edges susceptible to fractional Windows DPI/zoom gaps and overlaps",
+    "The single quad has a matching page-colour bottom edge to avoid gradient colour-rounding seams; image extent, identity layout, Popular spacing and discography positions remain unchanged",
+    "Whole-row hover reveals the fixed index play control; the existing hover reference now activates from the row centre rather than the index",
+    "Wheel smoothing uses frame-time decay without restarting on each tick, guarantees first-frame response, tolerates small pointer jitter and cancels pending opposite-direction movement; interaction-state tests cover sustained input and settling",
+    "All 160 native references repeat exactly on macOS 15; settings references show 0.8.15"
   ]
 }
