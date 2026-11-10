@@ -442,17 +442,26 @@ pub(super) fn artwork(
     if let Some(url) = url {
         frame
             .child(
-                img(url.to_owned())
-                    .image_cache(image_cache)
-                    // Absolute dimensions keep intrinsic portrait/wide image
-                    // ratios from influencing the square artwork's layout.
-                    .absolute()
-                    .inset_0()
-                    .size(artwork_size.size)
-                    .flex_none()
-                    .aspect_ratio(1.)
-                    .rounded(artwork_size.radius)
-                    .object_fit(gpui_kit::ObjectFit::Cover),
+                img({
+                    let cache = image_cache.clone();
+                    let resource = gpui_kit::Resource::Uri(url.to_owned().into());
+                    move |window: &mut Window, cx: &mut App| {
+                        let physical = f32::from(artwork_size.size.to_pixels(window.rem_size()))
+                            * window.scale_factor();
+                        cache.update(cx, |cache, cx| {
+                            cache.load_sized(&resource, physical.ceil() as u32, window, cx)
+                        })
+                    }
+                })
+                // Absolute dimensions keep intrinsic portrait/wide image
+                // ratios from influencing the square artwork's layout.
+                .absolute()
+                .inset_0()
+                .size(artwork_size.size)
+                .flex_none()
+                .aspect_ratio(1.)
+                .rounded(artwork_size.radius)
+                .object_fit(gpui_kit::ObjectFit::Cover),
             )
             .into_any_element()
     } else {

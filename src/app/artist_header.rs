@@ -32,8 +32,13 @@ impl ArtistHeader {
         }
     }
 
-    pub fn scroll(&mut self, offset: f32, cx: &mut Context<Self>) {
-        let target = (offset / 16.25).clamp(0., 1.);
+    pub fn scroll(&mut self, offset: f32, available: f32, cx: &mut Context<Self>) {
+        let distance = available.min(16.25);
+        let target = if distance > 0. {
+            (offset / distance).clamp(0., 1.)
+        } else {
+            0.
+        };
         if self.target != target {
             self.target = target;
             self.changed = Instant::now();

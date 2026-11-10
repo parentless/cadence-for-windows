@@ -555,6 +555,7 @@ impl Render for Toolbar {
                                 "detail-back",
                                 CadenceIcon::ChevronLeft,
                             )
+                            .test_support()
                             .on_click(cx.listener(
                                 move |_, _, _, cx| {
                                     cx.emit(ToolbarEvent::Navigate(origin));

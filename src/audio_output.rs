@@ -173,24 +173,32 @@ fn queue_capacity(sample_rate: u32, channels: u16) -> Result<usize, String> {
     Ok(samples)
 }
 
-fn map_output_channels(samples: Vec<f32>, output_channels: u16) -> Vec<f32> {
+fn map_output_channels<'a>(
+    samples: &'a [f32],
+    output_channels: u16,
+    mapped: &'a mut Vec<f32>,
+) -> &'a [f32] {
+    if output_channels == 2 {
+        return samples;
+    }
+    mapped.clear();
     match output_channels {
-        0 => Vec::new(),
-        2 => samples,
-        1 => samples
-            .chunks_exact(2)
-            .map(|frame| (frame[0] + frame[1]) * 0.5)
-            .collect(),
+        0 => {}
+        1 => mapped.extend(
+            samples
+                .chunks_exact(2)
+                .map(|frame| (frame[0] + frame[1]) * 0.5),
+        ),
         channels => {
             let channels = usize::from(channels);
-            let mut mapped = Vec::with_capacity(samples.len() / 2 * channels);
+            mapped.reserve(samples.len() / 2 * channels);
             for frame in samples.chunks_exact(2) {
                 mapped.extend_from_slice(frame);
                 mapped.resize(mapped.len() + channels - 2, 0.0);
             }
-            mapped
         }
     }
+    mapped
 }
 
 fn playback_buffer(capacity: usize) -> (BufferWriter, BufferReader) {
@@ -272,6 +280,8 @@ enum OutputConverter {
     Resampling {
         resampler: Box<Fft<f32>>,
         pending: Vec<f32>,
+        chunk_output: Vec<f32>,
+        converted: Vec<f32>,
     },
 }
 
@@ -292,44 +302,60 @@ impl OutputConverter {
             FixedSync::Input,
         )
         .map_err(|error| format!("could not configure audio resampling: {error}"))?;
+        let output_samples = resampler.output_frames_max() * usize::from(NUM_CHANNELS);
         Ok(Self::Resampling {
             resampler: Box::new(resampler),
-            pending: Vec::new(),
+            pending: Vec::with_capacity(RESAMPLER_CHUNK_FRAMES * usize::from(NUM_CHANNELS)),
+            chunk_output: vec![0.; output_samples],
+            converted: Vec::new(),
         })
     }
 
-    fn convert(&mut self, samples: Vec<f32>) -> Result<Vec<f32>, String> {
-        let Self::Resampling { resampler, pending } = self else {
+    fn convert<'a>(&'a mut self, samples: &'a [f32]) -> Result<&'a [f32], String> {
+        let Self::Resampling {
+            resampler,
+            pending,
+            chunk_output,
+            converted,
+        } = self
+        else {
             return Ok(samples);
         };
 
-        pending.extend_from_slice(&samples);
+        pending.extend_from_slice(samples);
         let frames_per_chunk = resampler.input_frames_next();
         let channels = usize::from(NUM_CHANNELS);
         let samples_per_chunk = frames_per_chunk
             .checked_mul(channels)
             .ok_or_else(|| "audio resampling chunk size overflowed".to_owned())?;
         let complete_chunks = pending.len() / samples_per_chunk;
-        let mut converted = Vec::new();
+        converted.clear();
         for chunk in pending[..complete_chunks * samples_per_chunk].chunks_exact(samples_per_chunk)
         {
             let input = InterleavedSlice::new(chunk, channels, frames_per_chunk)
                 .map_err(|error| format!("could not prepare audio for resampling: {error}"))?;
-            let output = resampler
-                .process(&input, None)
+            let frames_out = resampler.output_frames_max();
+            let mut output = InterleavedSlice::new_mut(chunk_output, channels, frames_out)
+                .map_err(|error| format!("could not prepare resampling output: {error}"))?;
+            let (_, produced) = resampler
+                .process_into_buffer(&input, &mut output, None)
                 .map_err(|error| format!("could not resample audio: {error}"))?;
-            converted.extend(output.take_data());
+            converted.extend_from_slice(&chunk_output[..produced * channels]);
         }
         pending.drain(..complete_chunks * samples_per_chunk);
-        Ok(converted)
+        Ok(converted.as_slice())
     }
 
     fn reset(&mut self) {
         if let Self::Resampling {
-            resampler, pending, ..
+            resampler,
+            pending,
+            converted,
+            ..
         } = self
         {
             pending.clear();
+            converted.clear();
             resampler.reset();
         }
     }
@@ -350,6 +376,8 @@ struct Playback {
     writer: BufferWriter,
     converter: OutputConverter,
     output_channels: u16,
+    sample_buffer: Vec<f32>,
+    channel_buffer: Vec<f32>,
     clear_requested: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
@@ -461,20 +489,27 @@ impl CpalSink {
         Ok(())
     }
 
-    fn write_packet(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
+    fn write_packet(&mut self, packet: AudioPacket, _converter: &mut Converter) -> SinkResult<()> {
         let playback = self.playback_mut()?;
         let samples = packet
             .samples()
             .map_err(|error| SinkError::OnWrite(error.to_string()))?;
-        let samples = converter.f64_to_f32(samples);
+        playback.sample_buffer.clear();
+        playback
+            .sample_buffer
+            .extend(samples.iter().map(|sample| *sample as f32));
         let samples = playback
             .converter
-            .convert(samples)
+            .convert(&playback.sample_buffer)
             .map_err(SinkError::OnWrite)?;
-        let samples = map_output_channels(samples, playback.output_channels);
+        let samples = map_output_channels(
+            samples,
+            playback.output_channels,
+            &mut playback.channel_buffer,
+        );
         playback
             .writer
-            .write_all(&samples, &playback.playing, &playback.failed)
+            .write_all(samples, &playback.playing, &playback.failed)
     }
 }
 
@@ -562,6 +597,8 @@ impl Playback {
             writer,
             converter,
             output_channels: config.channels,
+            sample_buffer: Vec::new(),
+            channel_buffer: Vec::new(),
             clear_requested,
             playing,
             failed,
@@ -819,20 +856,104 @@ mod tests {
         let mut converter = OutputConverter::new(44_100, 48_000).unwrap();
         let input = vec![0.25; 44_100 * 2];
 
-        let first_output = converter.convert(input.clone()).unwrap();
-        let second_output = converter.convert(input).unwrap();
+        assert_eq!(converter.convert(&input).unwrap().len() / 2, 47_680);
+        assert_eq!(converter.convert(&input).unwrap().len() / 2, 48_000);
+    }
 
-        assert_eq!(first_output.len() / 2, 47_680);
-        assert_eq!(second_output.len() / 2, 48_000);
+    #[test]
+    fn reusable_resampling_matches_allocating_reference_across_packet_boundaries() {
+        use rubato::{
+            Fft, FixedSync, Resampler as _, audioadapter_buffers::direct::InterleavedSlice,
+        };
+        for rate in [32_000, 48_000, 96_000, 192_000] {
+            let mut converter = OutputConverter::new(44_100, rate).unwrap();
+            let mut reference =
+                Fft::<f32>::new(44_100, rate as usize, 256, 2, FixedSync::Input).unwrap();
+            let samples: Vec<f32> = (0..24_000)
+                .map(|i| ((i as f32) * 0.013).sin() * 0.75)
+                .collect();
+            let mut pending = Vec::new();
+            let mut actual = Vec::new();
+            let mut expected = Vec::new();
+            for packet in samples.chunks(734) {
+                actual.extend_from_slice(converter.convert(packet).unwrap());
+                pending.extend_from_slice(packet);
+                let frames = reference.input_frames_next();
+                let chunk = frames * 2;
+                let complete = pending.len() / chunk * chunk;
+                for input in pending[..complete].chunks_exact(chunk) {
+                    let input = InterleavedSlice::new(input, 2, frames).unwrap();
+                    expected.extend(reference.process(&input, None).unwrap().take_data());
+                }
+                pending.drain(..complete);
+            }
+            assert_eq!(actual, expected, "output differs at {rate} Hz");
+            converter.reset();
+            let mut fresh = OutputConverter::new(44_100, rate).unwrap();
+            assert_eq!(
+                converter.convert(&samples[..734]).unwrap(),
+                fresh.convert(&samples[..734]).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn warmed_audio_buffers_keep_their_allocations_and_stereo_borrows_input() {
+        let input = vec![0.25; 2048];
+        let mut passthrough = OutputConverter::new(44_100, 44_100).unwrap();
+        assert_eq!(
+            passthrough.convert(&input).unwrap().as_ptr(),
+            input.as_ptr()
+        );
+        let mut channels = Vec::new();
+        assert_eq!(
+            map_output_channels(&input, 2, &mut channels).as_ptr(),
+            input.as_ptr()
+        );
+        assert_eq!(channels.capacity(), 0);
+        let mut converter = OutputConverter::new(44_100, 48_000).unwrap();
+        let allocations = |converter: &OutputConverter| {
+            let OutputConverter::Resampling {
+                pending,
+                converted,
+                chunk_output,
+                ..
+            } = converter
+            else {
+                panic!("resampler")
+            };
+            [
+                (pending.as_ptr(), pending.capacity()),
+                (converted.as_ptr(), converted.capacity()),
+                (chunk_output.as_ptr(), chunk_output.capacity()),
+            ]
+        };
+        for _ in 0..64 {
+            converter.convert(&input).unwrap();
+        }
+        let warmed = allocations(&converter);
+        for _ in 0..1000 {
+            converter.convert(&input).unwrap();
+        }
+        assert_eq!(allocations(&converter), warmed);
+        map_output_channels(&input, 6, &mut channels);
+        let warmed = (channels.as_ptr(), channels.capacity());
+        for _ in 0..1000 {
+            map_output_channels(&input, 6, &mut channels);
+        }
+        assert_eq!((channels.as_ptr(), channels.capacity()), warmed);
     }
 
     #[test]
     fn stereo_audio_is_mapped_to_the_device_channel_count() {
         let input = vec![0.5, -0.25, 1.0, -0.5];
 
-        assert_eq!(map_output_channels(input.clone(), 1), vec![0.125, 0.25]);
         assert_eq!(
-            map_output_channels(input, 4),
+            map_output_channels(&input, 1, &mut Vec::new()),
+            vec![0.125, 0.25]
+        );
+        assert_eq!(
+            map_output_channels(&input, 4, &mut Vec::new()),
             vec![0.5, -0.25, 0.0, 0.0, 1.0, -0.5, 0.0, 0.0]
         );
     }

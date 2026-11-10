@@ -2001,6 +2001,81 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
 }
 
 #[test]
+fn short_artist_pages_fully_dock_and_back_works_after_switching_artists() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    for (id, origin) in [("glaive", Route::LikedSongs), ("kurtains", Route::Artist)] {
+        fixture.update(|_, cx| {
+            cx.set_reduce_motion(true);
+            workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+                workspace.open_artist(artist_ref(id, id), origin, cx);
+            });
+        });
+        let BackendCommand::LoadArtist { respond, .. } =
+            fixture.backend.commands.try_recv().unwrap()
+        else {
+            panic!("artist request")
+        };
+        respond
+            .send(Ok((
+                model::Artist {
+                    provider: model::Provider::Spotify,
+                    source_id: id.into(),
+                    spotify_uri: None,
+                    name: id.into(),
+                    artwork_url: None,
+                },
+                vec![track(0), track(1), track(2)],
+                vec![model::Album {
+                    provider: model::Provider::Spotify,
+                    source_id: format!("{id}-album"),
+                    spotify_uri: None,
+                    name: "Album".into(),
+                    artists: Vec::new(),
+                    release_date: None,
+                    artwork_url: None,
+                    track_count: Some(3),
+                }],
+            )))
+            .unwrap();
+        fixture.update(|_, _| {});
+        fixture.update(|window, _| {
+            assert_eq!(
+                window.find("artist-portrait").bounds().size.width,
+                gpui_kit::Rems(10.).to_pixels(window.rem_size()),
+                "new artist resets the header"
+            );
+        });
+        fixture.update(|window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position: window.find("artist-portrait").bounds().center(),
+                    delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        fixture.update(|window, _| {
+            let portrait = window.find("artist-portrait").bounds();
+            assert_eq!(
+                portrait.size.width,
+                gpui_kit::Rems(2.).to_pixels(window.rem_size()),
+                "short page must finish docking"
+            );
+            assert!(portrait.left() >= window.find("search-field").bounds().right());
+        });
+    }
+    fixture.update(|window, cx| window.click("detail-back", cx));
+    assert_eq!(
+        fixture.route(),
+        Route::LikedSongs,
+        "Back must be clickable and cannot point to the current artist route"
+    );
+}
+
+#[test]
 fn tracks_use_double_click_and_liked_songs_have_no_column_titles() {
     let mut fixture = Fixture::new(false);
     fixture.update(|window, cx| {

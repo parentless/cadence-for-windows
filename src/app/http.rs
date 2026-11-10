@@ -5,7 +5,15 @@ use futures::{FutureExt as _, StreamExt as _, future::BoxFuture};
 use gpui_kit::http_client::{AsyncBody, HttpClient, Inner, Response, Url, http};
 
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-const MAX_IMAGE_DOWNLOAD_BYTES: usize = 10 * 1024 * 1024;
+pub(super) const MAX_IMAGE_DOWNLOAD_BYTES: usize = 10 * 1024 * 1024;
+
+// Dropping a cache request must cancel its Tokio work rather than detach it.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 pub(super) struct ImageHttpClient {
     client: reqwest::Client,
@@ -63,9 +71,9 @@ impl HttpClient for ImageHttpClient {
         };
         let runtime = self.runtime.clone();
         async move {
-            let response = runtime
-                .spawn(async move { request.send().await?.error_for_status() })
-                .await??;
+            let mut pending =
+                AbortOnDrop(runtime.spawn(async move { request.send().await?.error_for_status() }));
+            let response = (&mut pending.0).await??;
             let status = response.status();
             let headers = response.headers().clone();
             if let Some(content_length) = response.content_length() {

@@ -665,8 +665,12 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             let backdrop = window.find("artist-backdrop-image").bounds();
             let header = window.find("artist-header").bounds();
             assert_eq!(
-                backdrop.size, header.size,
-                "backdrop must cover the full header for every source aspect ratio"
+                backdrop.size.width, header.size.width,
+                "backdrop must cover the full header width for every source aspect ratio"
+            );
+            assert_eq!(
+                backdrop.size.height,
+                header.size.height + Rems(2.875).to_pixels(window.rem_size())
             );
         })
         .expect("square artist portrait");
@@ -685,7 +689,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         let seam = cx
             .update_window(handle.into(), |_, window, _| {
                 window
-                    .find("artist-header")
+                    .find("artist-backdrop")
                     .bounds()
                     .to_device_pixels(window.scale_factor())
             })
@@ -693,9 +697,11 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         let bottom: i32 = seam.bottom().into();
         let left: i32 = seam.left().into();
         let right: i32 = seam.right().into();
-        for x in (left + 8..right - 8).step_by(31) {
+        // The extended tail reaches the first row; sample the page gutters,
+        // outside row hover fills and text.
+        for x in [left + 8, right - 8] {
             assert_eq!(
-                screenshot.get_pixel(x as u32, (bottom - 8) as u32),
+                screenshot.get_pixel(x as u32, (bottom - 1) as u32),
                 screenshot.get_pixel(x as u32, (bottom + 1) as u32),
                 "artist backdrop must be solid page colour before the bottom edge"
             );

@@ -61,6 +61,11 @@ impl Router {
     /// when `origin` already leads back to `route`, it takes over where
     /// `route` used to lead, and the trail stays a line.
     fn set_origin(&mut self, route: Route, origin: Route) {
+        // Each detail route owns one live page. Replacing that page cannot
+        // point Back to itself; retain the route that originally opened it.
+        if route == origin {
+            return;
+        }
         let returning = self.origin_of(origin) == Some(route);
         if let Some(previous) = self.origin_of(route).filter(|_| returning) {
             *self.origin_mut(origin) = previous;
@@ -145,13 +150,13 @@ mod tests {
     }
 
     #[test]
-    fn opening_a_different_artist_from_the_artist_page_moves_the_way_back() {
+    fn opening_a_different_artist_keeps_a_working_way_back() {
         let mut router = Router::new();
 
         router.open_artist(Route::LikedSongs, true);
         router.open_artist(Route::Artist, true);
 
-        assert_eq!(router.back_target(), Some(Route::Artist));
+        assert_eq!(router.back_target(), Some(Route::LikedSongs));
     }
 
     #[test]

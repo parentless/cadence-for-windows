@@ -545,8 +545,9 @@ impl ArtistPage {
                 cx.defer(move |cx| {
                     let _ = page.update(cx, |page, cx| {
                         let offset = -page.content_state.scroll_px_offset_for_scrollbar().y / rem;
+                        let available = page.content_state.max_offset_for_scrollbar().y / rem;
                         page.header_motion
-                            .update(cx, |header, cx| header.scroll(offset, cx));
+                            .update(cx, |header, cx| header.scroll(offset, available, cx));
                     });
                 });
             }
@@ -660,7 +661,19 @@ impl ArtistPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if index == 0 {
-            return self.header(window, cx);
+            let header = self.header(window, cx);
+            return if self.loaded && self.error.is_none() {
+                div()
+                    .relative()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .child(header)
+                    .child(self.popular(cx))
+                    .into_any_element()
+            } else {
+                header
+            };
         }
         if !self.loaded {
             return div()
@@ -677,7 +690,6 @@ impl ArtistPage {
             )
             .into_any_element();
         }
-        let index = index - 1;
         let heading = |id, title| {
             div()
                 .id(id)
@@ -687,25 +699,6 @@ impl ArtistPage {
                 .text_color(rgb(appearance::Appearance::palette(cx).text_primary))
                 .child(title)
         };
-        if index == 0 {
-            return div()
-                .px_8()
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(heading("artist-popular-heading", "Popular"))
-                .when(self.tracks.is_empty(), |section| {
-                    section.child(components::page_detail(
-                        appearance::Appearance::palette(cx),
-                        "No popular tracks available",
-                    ))
-                })
-                .when(!self.tracks.is_empty(), |section| {
-                    section.child(self.track_list.clone())
-                })
-                .into_any_element();
-        }
         if index == 1 {
             return div()
                 .px_8()
@@ -740,6 +733,35 @@ impl ArtistPage {
             cards = cards.child(div().w(tokens::ALBUM_CARD_ARTWORK.size + Rems(1.)));
         }
         cards.into_any_element()
+    }
+
+    fn popular(&self, cx: &App) -> AnyElement {
+        let heading = |id, title| {
+            div()
+                .id(id)
+                .test_support()
+                .text_xl()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .text_color(rgb(appearance::Appearance::palette(cx).text_primary))
+                .child(title)
+        };
+        div()
+            .px_8()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(heading("artist-popular-heading", "Popular"))
+            .when(self.tracks.is_empty(), |section| {
+                section.child(components::page_detail(
+                    appearance::Appearance::palette(cx),
+                    "No popular tracks available",
+                ))
+            })
+            .when(!self.tracks.is_empty(), |section| {
+                section.child(self.track_list.clone())
+            })
+            .into_any_element()
     }
 
     fn album_card(&self, album: &model::Album, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1290,41 +1312,61 @@ impl ArtistPage {
             .id("artist-backdrop-image")
             .test_support()
         });
+        let header_height = (tokens::ARTIST_ARTWORK.size + DETAIL_HEADER_PADDING * 2.)
+            .to_pixels(window.rem_size())
+            + overlay_inset;
+        let backdrop_height = header_height + Rems(2.875).to_pixels(window.rem_size());
+        // Static gradient bands approximate the approved eased fade. The header
+        // and Popular share one virtual item, so the short tail cannot be culled early.
+        let stops = [
+            (0.50, 0.),
+            (0.62, 0.067),
+            (0.75, 0.467),
+            (0.87, 0.8),
+            (0.95, 0.933),
+            (1., 1.),
+        ];
+        let background = div()
+            .id("artist-backdrop")
+            .test_support()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(backdrop_height)
+            .overflow_hidden()
+            .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
+            .child(div().absolute().inset_0().bg(gpui_kit::rgba(0x10101455)))
+            .children(stops.windows(2).map(|pair| {
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(backdrop_height * pair[0].0)
+                    .h(backdrop_height * (pair[1].0 - pair[0].0))
+                    .bg(gpui_kit::linear_gradient(
+                        180.,
+                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(pair[0].1), 0.),
+                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(pair[1].1), 1.),
+                    ))
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(2.))
+                    .bg(rgb(palette.surface)),
+            );
         let header = div()
             .id("artist-header")
             .test_support()
             .relative()
             .w_full()
-            .h((tokens::ARTIST_ARTWORK.size + DETAIL_HEADER_PADDING * 2.)
-                .to_pixels(window.rem_size())
-                + overlay_inset)
+            .h(header_height)
             .flex_none()
-            .overflow_hidden()
-            .children(backdrop.map(|image| div().absolute().inset_0().size_full().child(image)))
-            .child(div().absolute().inset_0().bg(gpui_kit::rgba(0x10101455)))
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .h(relative(0.28))
-                    .bg(gpui_kit::linear_gradient(
-                        180.,
-                        gpui_kit::linear_color_stop(rgb(palette.surface).opacity(0.), 0.),
-                        gpui_kit::linear_color_stop(rgb(palette.surface), 0.88),
-                    )),
-            )
-            // Finish on the exact page fill (also avoids GPU interpolation rounding at the seam).
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .h(relative(0.03))
-                    .bg(rgb(palette.surface)),
-            )
+            .child(background)
             .child(
                 div()
                     .absolute()
@@ -1363,7 +1405,7 @@ impl Render for ArtistPage {
         );
         if self.content_layout != Some(layout) {
             let count = if layout.4 {
-                3 + self.albums.len().div_ceil(columns)
+                2 + self.albums.len().div_ceil(columns)
             } else {
                 2
             };
@@ -1371,14 +1413,14 @@ impl Render for ArtistPage {
                 // Resizing, zooming or refreshing a loaded page must not reset
                 // to its header. Anchor the same release when columns change.
                 let mut anchor = self.content_state.logical_scroll_top();
-                if anchor.item_ix >= 3 {
-                    anchor.item_ix = 3 + (anchor.item_ix - 3) * old.2 / columns;
+                if anchor.item_ix >= 2 {
+                    anchor.item_ix = 2 + (anchor.item_ix - 2) * old.2 / columns;
                 }
                 anchor.item_ix = anchor.item_ix.min(count.saturating_sub(1));
                 anchor.offset_in_item = anchor.offset_in_item / old.3 * layout.3;
                 let previous_count = self.content_state.item_count();
                 if previous_count != count {
-                    self.content_state.splice(3..previous_count, count - 3);
+                    self.content_state.splice(2..previous_count, count - 2);
                 }
                 self.content_state.remeasure();
                 self.content_state.scroll_to(anchor);

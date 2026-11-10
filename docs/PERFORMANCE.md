@@ -27,7 +27,8 @@ Older playlist chunks are evicted, but scroll position is retained: revisiting a
 distant range refetches that range directly. Playback continues independently
 using Spotify's raw item cursor.
 
-Artwork has a shared 48-entry / 32 MiB decoded-image budget. Detail pages use
+Artwork has a shared 48-entry / 32 MiB retained-image budget (decoded pixels
+and retained compressed sources combined; one oversized entry is allowed). Detail pages use
 the same theme background as search, with no cover-colour sampling. Artist
 skeletons are static; there is no shimmer timer or new blur pass.
 
@@ -113,3 +114,41 @@ trying to work around it. No new network request is added to successful loads.
 
 These are code bounds and regression checks, not a Windows CPU/GPU or long-run
 RAM measurement. No claim of zero overhead or a measured speedup is made.
+
+
+# Audio, artwork and short artist pages (0.8.14)
+
+Playback reuses its float-conversion, channel-mapping and resampling buffers.
+Stereo channel mapping and matching-rate output borrow their inputs directly.
+Resampling uses Rubato's preallocated-output API with the same FFT settings;
+regression tests compare exact samples against its allocating API across four
+output rates and irregular packet boundaries. Reset clears pending samples and
+resampler history without discarding buffer capacity. A repeated-packet test
+checks that warmed buffer pointers and capacities stay unchanged. This reduces
+allocation churn; it does not change the audio queue, quality or supported devices.
+
+Artwork requests choose power-of-two sizes from 64 to 2048 physical pixels,
+including UI zoom and display scale, and preserve the source aspect ratio.
+Small artwork is not enlarged. One decoded size per URL and its compressed
+source share the existing byte budget. Upgrades reuse that source and keep the
+old thumbnail visible until ready; in-flight downloads finish before upgrading.
+Two shared workers bound simultaneous download/decode/blur work. Downloads
+retain the existing 10 MiB cap and timeouts; decoders additionally limit source
+dimensions and allocation. Decode work has transient memory outside the
+retained cache budget. Completed results are accounted and evicted on the UI
+thread even while the window is idle. Cache clearing cancels waiting requests;
+an abort-on-drop guard also cancels the underlying Tokio HTTP task.
+Notifications hold a weak cache owner, and pending views are drained on
+completion. Blur reads the source pixel slice directly rather than cloning it.
+
+The approved artist backdrop extends 46 logical pixels farther at 100% zoom
+and uses static gradient bands. Header and Popular share a virtual item so the
+fade cannot disappear early when the header scrolls out. Track spacing and
+discography virtualization remain unchanged. Docking uses the smaller of the
+normal transition distance and actual available scroll distance; short pages
+therefore reach the dock. Switching artists retains a usable Back destination.
+Regression tests scroll short pages, switch artist, scroll again and click Back.
+
+These changes have structural bounds and regression coverage. They have not
+been measured with a Windows allocation profiler or a long-running GPU/CPU
+capture, so they do not establish a measured speedup or prove absence of every leak.
