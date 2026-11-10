@@ -455,7 +455,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         }
         Scene::TrackIndexHover => {
             cx.update_window(handle.into(), |_, window, cx| {
-                window.hover(("track-index", 1usize), cx)
+                window.hover(("spotify-track", 1usize), cx)
             })
             .unwrap();
             settle(&mut cx, handle.into());

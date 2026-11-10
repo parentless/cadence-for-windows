@@ -371,6 +371,7 @@ impl RenderOnce for TrackRow {
         let on_play = self.on_play;
         let row = components::row_button(palette, ("spotify-track", index))
             .test_support()
+            .group("track-row")
             .w_full()
             .h(if self.dense { Rems(3.25) } else { Rems(3.75) })
             .px_3()
@@ -386,7 +387,6 @@ impl RenderOnce for TrackRow {
                 div()
                     .id(("track-index", index))
                     .test_support()
-                    .group("track-index")
                     .relative()
                     .w(INDEX_COLUMN_WIDTH)
                     .h_8()
@@ -399,7 +399,7 @@ impl RenderOnce for TrackRow {
                     .when(!self.current, |column| {
                         column.child(
                             div()
-                                .group_hover("track-index", |style| style.opacity(0.))
+                                .group_hover("track-row", |style| style.opacity(0.))
                                 .child((index + 1).to_string()),
                         )
                     })
@@ -430,7 +430,7 @@ impl RenderOnce for TrackRow {
                             button
                                 .tab_stop(false)
                                 .opacity(0.)
-                                .group_hover("track-index", |style| style.opacity(1.))
+                                .group_hover("track-row", |style| style.opacity(1.))
                         })
                         .child(components::icon(
                             if self.current && self.playing {

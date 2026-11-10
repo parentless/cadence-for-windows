@@ -165,3 +165,21 @@ closely approximating the previous opacity curve without internal joins.
 A matching bottom edge in the same quad avoids colour-rounding seams.
 This reduces the fade overlay from six quads to one without adding a texture,
 blur pass, timer or cache.
+
+
+Discrete wheel smoothing now advances by elapsed frame time rather than
+restarting its easing clock on each input event. New input contributes at
+least 45% of its distance on the first presented frame, with the remainder
+decaying over subsequent frames and an 80 ms settling cutoff after input stops.
+Reversals discard the old direction immediately. An eight-point tolerance
+prevents tiny pointer jitter from discarding pending movement; larger pointer
+moves, clicks, keys and route changes still cancel it. Precise pixel input and
+reduced-motion scrolling retain their direct native path. State remains fixed
+size with one outstanding frame callback and no per-input deferred dispatch,
+queue, timer or idle polling. Tests cover first-frame response, reversal,
+sustained input distance, bounded tails and pointer jitter.
+
+Track play glyphs now follow the existing whole-row hover group. The fixed
+index area, click actions, row geometry and keyboard tab order are unchanged;
+no animation or task is added. The native hover reference activates from the
+row centre rather than the index to cover this behaviour.
