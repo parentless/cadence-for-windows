@@ -46,6 +46,46 @@ pub(super) fn track(index: usize) -> model::Track {
     }
 }
 
+pub(super) fn gallery_results() -> model::CatalogSearchResults {
+    model::CatalogSearchResults {
+        artists: ["glaive", "Glass Animals", "Glasser"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| model::Artist {
+                provider: model::Provider::Spotify,
+                source_id: format!("artist-{index}"),
+                spotify_uri: None,
+                name: name.into(),
+                artwork_url: None,
+            })
+            .collect(),
+        albums: [
+            "God Save The Three",
+            "Y’all",
+            "May It Never Falter",
+            "i care so much that i dont care at all",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| model::Album {
+            provider: model::Provider::Spotify,
+            source_id: format!("album-{index}"),
+            spotify_uri: None,
+            name: name.into(),
+            artists: vec![model::ArtistRef {
+                name: "glaive".into(),
+                source_id: Some("artist-0".into()),
+                spotify_uri: None,
+            }],
+            release_date: Some((2026 - index).to_string()),
+            artwork_url: None,
+            track_count: None,
+        })
+        .collect(),
+        tracks: (0..10).map(track).collect(),
+    }
+}
+
 pub(super) fn ready(cx: &mut App) {
     services::AppServices::session(cx).update(cx, |session, cx| {
         session.handle_backend_event(

@@ -185,3 +185,45 @@ Track play glyphs now follow the existing whole-row hover group. The fixed
 index area, click actions, row geometry and keyboard tab order are unchanged;
 no animation or task is added. The native hover reference activates from the
 row centre rather than the index to cover this behaviour.
+
+# Gallery search and Windows lifetime
+
+Submitted search replaces playlist discovery with albums in the same combined
+Spotify request with a five-item limit per type. It retains at most three artists, four albums and five playable
+songs, preserving Spotify's result order. Opening a card uses its loaded ID;
+there is no follow-up search or album-track/discography prefetch. All sections
+share one scroll area and reuse the standard track rows and bounded artwork
+cache. These small result groups are laid out directly; library, playlist and
+artist discography virtualization are unchanged. Layout measurement schedules
+an update only when the content width changes. Portraits are decoded for their
+short edge and cover images for their displayed size, including zoom/DPI.
+Albums add up to four artwork entries to the existing shared budget, rather
+than creating an additional image cache.
+
+Clearing or replacing search now also clears its nested track list immediately;
+previously that list could retain the last search's track metadata. Read-only
+catalog workers select against their reply receiver closing, so abandoning a
+page cancels its HTTP future or rate-limit wait. Write workers keep their
+existing completion semantics. Tests cover one combined HTTP request, bounded
+result counts, no detail prefetch, shared scrolling, card navigation, album
+header artist links, cancellation and release of the old search allocation.
+
+The review of the recent cached-suggestion, row-hover, rail-tooltip, paging,
+artist-docking/fade, audio and artwork changes found no additional unbounded
+collection or obvious strong-reference cycle in those paths. Existing tests
+cover warm audio-buffer reuse, bounded artwork concurrency/cache eviction,
+playlist viewport paging and finite wheel settling. This is a source-level
+review and regression coverage, not a Windows heap, CPU or GPU measurement.
+The useful next measurement is a release-build Windows working-set/private-byte
+and GPU-memory trace during repeated browsing and playback; idle after warm-up
+and retained cache bytes should be recorded separately from transient decoding.
+Reducing artwork retention would trade memory for redecoding/refetching, so the
+shared budget is left unchanged without evidence that a smaller one improves
+the target workload.
+
+Windows now uses GPUI's native last-window-close exit behavior. The prior
+explicit-only quit policy intentionally kept the whole process and playback
+alive without a window. Closing the last window now invokes normal application
+shutdown, saving playback position and stopping the backend/Discord services.
+macOS retains its standard Dock/menu-bar lifetime. Window reconciliation opens
+a replacement before closing the old window, preserving sign-in transitions.

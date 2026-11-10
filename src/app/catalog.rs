@@ -3,7 +3,7 @@ use gpui_kit::TestSupportExt as _;
 use std::cell::RefCell;
 
 use page::PageEvent;
-use track_list::{PlaylistList, TrackList};
+use track_list::TrackList;
 
 /// Sends `command` and hands back the reply channel to await.
 ///
@@ -40,54 +40,45 @@ pub(super) struct SearchPage {
     query: String,
     /// The query the current results answer, keying the result lists so a
     /// new search starts back at the top.
-    results_query: String,
-    kind: SearchKind,
+    results_query: SharedString,
     tracks: Arc<[model::Track]>,
-    playlists: Arc<[model::Playlist]>,
+    albums: Arc<[model::Album]>,
     artists: Arc<[model::Artist]>,
     loaded: bool,
     searching: bool,
     error: Option<SharedString>,
     request: Option<gpui_kit::Task<()>>,
     track_list: Entity<TrackList>,
-    playlist_list: Entity<PlaylistList>,
-    _list_subscriptions: [Subscription; 2],
+    scroll: gpui_kit::ScrollHandle,
+    content_width: Pixels,
+    _list_subscription: Subscription,
 }
 
 impl EventEmitter<PageEvent> for SearchPage {}
 
 impl SearchPage {
     pub(super) fn new(backend: BackendHandle, cx: &mut Context<Self>) -> Self {
-        let track_list = cx.new(|cx| TrackList::new(cx));
-        let playlist_list = cx.new(|cx| PlaylistList::new(cx));
+        let track_list = cx.new(|cx| TrackList::new(cx).with_inline_rows());
         Self {
             backend,
             query: String::new(),
-            results_query: String::new(),
-            kind: SearchKind::Tracks,
+            results_query: SharedString::default(),
             tracks: Arc::default(),
-            playlists: Arc::default(),
+            albums: Arc::default(),
             artists: Arc::default(),
             loaded: false,
             searching: false,
             error: None,
             request: None,
-            _list_subscriptions: [
-                page::forward(&track_list, cx),
-                page::forward(&playlist_list, cx),
-            ],
+            scroll: gpui_kit::ScrollHandle::new(),
+            content_width: px(800.),
+            _list_subscription: page::forward(&track_list, cx),
             track_list,
-            playlist_list,
         }
     }
 
     pub(super) fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
         self.query = query;
-        cx.notify();
-    }
-
-    pub(super) fn set_kind(&mut self, kind: SearchKind, cx: &mut Context<Self>) {
-        self.kind = kind;
         cx.notify();
     }
 
@@ -97,7 +88,7 @@ impl SearchPage {
         if query.is_empty() {
             return false;
         }
-        self.loaded = false;
+        self.clear(cx);
         self.searching = true;
         self.error = None;
         let reply = request(&self.backend, {
@@ -111,10 +102,13 @@ impl SearchPage {
                 page.searching = false;
                 page.loaded = true;
                 match result {
-                    Ok(results) => {
-                        page.results_query = query;
+                    Ok(mut results) => {
+                        results.artists.truncate(model::SEARCH_ARTIST_LIMIT);
+                        results.albums.truncate(model::SEARCH_ALBUM_LIMIT);
+                        results.tracks.truncate(model::SEARCH_TRACK_LIMIT);
+                        page.results_query = query.into();
                         page.tracks = results.tracks.into();
-                        page.playlists = results.playlists.into();
+                        page.albums = results.albums.into();
                         page.artists = results.artists.into();
                         page.error = None;
                         cx.emit(PageEvent::Loaded);
@@ -138,9 +132,11 @@ impl SearchPage {
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.request = None;
-        self.results_query.clear();
+        self.results_query = SharedString::default();
+        self.track_list.update(cx, |list, cx| list.clear(cx));
+        self.scroll.set_offset(point(px(0.), px(0.)));
         self.tracks = Arc::default();
-        self.playlists = Arc::default();
+        self.albums = Arc::default();
         self.artists = Arc::default();
         self.loaded = false;
         self.searching = false;
@@ -1000,136 +996,264 @@ impl AlbumPage {
     }
 }
 
-impl Render for SearchPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl SearchPage {
+    fn artist_card(&self, index: usize, width: Rems, cx: &mut Context<Self>) -> AnyElement {
         let palette = appearance::Appearance::palette(cx);
-        let kind = self.kind;
-        let query = self.query.clone();
-        let tracks = self.tracks.clone();
-        let playlists = self.playlists.clone();
-        let searching = self.searching;
-        let loaded = self.loaded;
-        let results = if self.error.is_some() {
-            components::empty_state(palette, "Unable to search Spotify").into_any_element()
-        } else if kind == SearchKind::Tracks && !tracks.is_empty() {
-            let list_id = (ElementId::from("search-tracks"), self.results_query.clone());
-            self.track_list
-                .update(cx, |list, cx| list.show(list_id, tracks, cx));
-            self.track_list.clone().into_any_element()
-        } else if kind == SearchKind::Playlists && !playlists.is_empty() {
-            let list_id = (
-                ElementId::from("search-playlists"),
-                self.results_query.clone(),
-            );
-            self.playlist_list
-                .update(cx, |list, cx| list.show(list_id, playlists, cx));
-            self.playlist_list.clone().into_any_element()
-        } else {
-            let message = match (loaded, searching) {
-                (true, _) if kind == SearchKind::Tracks => "No tracks found",
-                (true, _) => "No playlists found",
-                (_, true) => "Searching Spotify…",
-                _ => "Press Return to search",
-            };
-            components::empty_state(palette, message).into_any_element()
-        };
-
-        let results =
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .when(
-                    kind == SearchKind::Tracks && !self.artists.is_empty() && !searching,
-                    |page| {
-                        let cache = services::AppServices::image_cache(cx);
-                        page.child(
-                            div()
-                                .mb_3()
-                                .child(components::section_label(palette, "Artists"))
-                                .child(div().mt_2().flex().gap_2().children(
-                                    self.artists.iter().take(3).enumerate().map(
-                                        |(index, artist)| {
-                                            let reference = model::ArtistRef {
-                                                name: artist.name.clone(),
-                                                source_id: Some(artist.source_id.clone()),
-                                                spotify_uri: artist.spotify_uri.clone(),
-                                            };
-                                            components::button(palette, ("search-artist", index))
-                                                .test_support()
-                                                .hover(|style| style.bg(rgb(palette.control)))
-                                                .h_20()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .px_2()
-                                                .gap_2()
-                                                .rounded_lg()
-                                                .justify_start()
-                                                .child(components::artwork(
-                                                    palette,
-                                                    &cache,
-                                                    artist.artwork_url.as_deref(),
-                                                    tokens::SEARCH_ARTIST_ARTWORK,
-                                                    CadenceIcon::Person,
-                                                ))
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .min_w_0()
-                                                        .text_ellipsis()
-                                                        .line_clamp(1)
-                                                        .child(artist.name.clone()),
-                                                )
-                                                .on_click(cx.listener(move |_, _, _, cx| {
-                                                    cx.emit(PageEvent::OpenArtist(
-                                                        reference.clone(),
-                                                    ))
-                                                }))
-                                        },
-                                    ),
-                                )),
-                        )
-                    },
-                )
-                .child(results);
-
-        components::page("search-page")
-            .pt_3()
-            .child(components::page_heading(
+        let artist = &self.artists[index];
+        let cache = services::AppServices::image_cache(cx);
+        components::button(palette, ("search-artist", index))
+            .test_support()
+            .w(width + Rems(0.75))
+            .min_w_0()
+            .p_1p5()
+            .flex_col()
+            .items_start()
+            .justify_start()
+            .gap_2()
+            .rounded_xl()
+            .hover(|style| style.bg(rgb(palette.surface_hover)))
+            .child(components::rectangular_artwork(
                 palette,
-                "Search results",
-                format!("Results for {query}"),
+                &cache,
+                artist.artwork_url.as_deref(),
+                tokens::SEARCH_ARTIST_ARTWORK,
+                width,
+                CadenceIcon::Person,
             ))
             .child(
                 div()
-                    .flex()
-                    .gap_2()
-                    .mb_5()
+                    .w_full()
+                    .truncate()
+                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                    .child(artist.name.clone()),
+            )
+            .child(components::page_detail(palette, "Artist"))
+            // Capture just the index, resolving the current metadata on activation.
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(artist) = this.artists.get(index) {
+                    cx.emit(PageEvent::OpenArtist(model::ArtistRef {
+                        name: artist.name.clone(),
+                        source_id: Some(artist.source_id.clone()),
+                        spotify_uri: artist.spotify_uri.clone(),
+                    }));
+                }
+            }))
+            .into_any_element()
+    }
+
+    fn album_card(&self, index: usize, width: Rems, cx: &mut Context<Self>) -> AnyElement {
+        let palette = appearance::Appearance::palette(cx);
+        let album = &self.albums[index];
+        let cache = services::AppServices::image_cache(cx);
+        let mut detail = album
+            .artists
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if let Some(year) = album.release_date.as_deref().and_then(|date| date.get(..4)) {
+            if !detail.is_empty() {
+                detail.push_str(" · ");
+            }
+            detail.push_str(year);
+        }
+        components::button(palette, ("search-album", index))
+            .test_support()
+            .w(width + Rems(0.75))
+            .min_w_0()
+            .p_1p5()
+            .flex_col()
+            .items_start()
+            .justify_start()
+            .gap_2()
+            .rounded_xl()
+            .hover(|style| style.bg(rgb(palette.surface_hover)))
+            .child(components::artwork(
+                palette,
+                &cache,
+                album.artwork_url.as_deref(),
+                tokens::ArtworkSize {
+                    size: width,
+                    radius: Rems(0.625),
+                },
+                CadenceIcon::MusicNote,
+            ))
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                    .child(album.name.clone()),
+            )
+            .child(components::page_detail(palette, detail).w_full().truncate())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(album) = this.albums.get(index) {
+                    cx.emit(PageEvent::OpenAlbum(model::AlbumRef {
+                        name: album.name.clone(),
+                        source_id: Some(album.source_id.clone()),
+                        spotify_uri: album.spotify_uri.clone(),
+                        artwork_url: album.artwork_url.clone(),
+                    }));
+                }
+            }))
+            .into_any_element()
+    }
+}
+
+impl Render for SearchPage {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = appearance::Appearance::palette(cx);
+        let heading = |id, text| {
+            div()
+                .id(id)
+                .test_support()
+                .text_xl()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .text_color(rgb(palette.text_primary))
+                .child(text)
+        };
+        let available = (self.content_width / window.rem_size()).max(1.);
+        let artist_columns = if available < 26. {
+            1
+        } else {
+            model::SEARCH_ARTIST_LIMIT
+        };
+        let album_columns = if available < 26. {
+            2
+        } else {
+            model::SEARCH_ALBUM_LIMIT
+        };
+        let card_width = |columns: usize| {
+            Rems(((available - (columns - 1) as f32) / columns as f32 - 0.75).max(1.))
+        };
+        let mut content = div().flex().flex_col().w_full().gap_6();
+        if self.searching {
+            content = content.child(components::list_skeleton(palette));
+        } else if self.error.is_some() {
+            content = content.child(components::empty_state(palette, "Unable to search Spotify"));
+        } else if !self.loaded {
+            content = content.child(components::empty_state(palette, "Press Return to search"));
+        } else if self.artists.is_empty() && self.albums.is_empty() && self.tracks.is_empty() {
+            content = content.child(components::empty_state(palette, "No results found"));
+        } else {
+            let mut artists = div().flex().flex_wrap().gap_4();
+            for index in 0..self.artists.len() {
+                artists = artists.child(self.artist_card(index, card_width(artist_columns), cx));
+            }
+            let mut albums = div().flex().flex_wrap().gap_4();
+            for index in 0..self.albums.len() {
+                albums = albums.child(self.album_card(index, card_width(album_columns), cx));
+            }
+            self.track_list.update(cx, |list, cx| {
+                list.show(
+                    (ElementId::from("search-tracks"), self.results_query.clone()),
+                    self.tracks.clone(),
+                    cx,
+                );
+            });
+            content = content
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(heading("search-artists-heading", "Top Artists"))
+                        .when(self.artists.is_empty(), |section| {
+                            section.child(components::page_detail(palette, "No artists found"))
+                        })
+                        .child(artists),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(heading("search-albums-heading", "Top Albums"))
+                        .when(self.albums.is_empty(), |section| {
+                            section.child(components::page_detail(palette, "No albums found"))
+                        })
+                        .child(albums),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(heading("search-songs-heading", "Songs"))
+                        .when(self.tracks.is_empty(), |section| {
+                            section.child(components::page_detail(palette, "No songs found"))
+                        })
+                        .when(!self.tracks.is_empty(), |section| {
+                            section.child(self.track_list.clone())
+                        }),
+                );
+        }
+        // All bounded sections share one scroll recipient. No per-card tasks,
+        // nested scrolling, or discography/album-track prefetch is needed.
+        div()
+            .id("search-page")
+            .size_full()
+            .min_h_0()
+            .relative()
+            .bg(rgb(palette.surface))
+            .text_color(rgb(palette.text))
+            .child(
+                div()
+                    .id("search-scroll")
+                    .test_support()
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .child(
-                        components::pill(
-                            palette,
-                            "tab-tracks",
-                            "Tracks",
-                            kind == SearchKind::Tracks,
-                        )
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.set_kind(SearchKind::Tracks, cx)),
-                        ),
-                    )
-                    .child(
-                        components::pill(
-                            palette,
-                            "tab-playlists",
-                            "Playlists",
-                            kind == SearchKind::Playlists,
-                        )
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.set_kind(SearchKind::Playlists, cx)),
-                        ),
+                        div()
+                            .p_8()
+                            .pt_3()
+                            .pr(px(48.))
+                            .w_full()
+                            .child(components::page_heading(
+                                palette,
+                                "Search results",
+                                format!("Results for {}", self.query),
+                            ))
+                            .child(
+                                content.relative().child(
+                                    gpui_kit::canvas(
+                                        {
+                                            let page = cx.weak_entity();
+                                            move |bounds, _, cx| {
+                                                let width = bounds.size.width;
+                                                if page
+                                                    .read_with(cx, |page, _| {
+                                                        page.content_width != width
+                                                    })
+                                                    .unwrap_or(false)
+                                                {
+                                                    let page = page.clone();
+                                                    cx.defer(move |cx| {
+                                                        let _ = page.update(cx, |page, cx| {
+                                                            if page.content_width != width {
+                                                                page.content_width = width;
+                                                                cx.notify();
+                                                            }
+                                                        });
+                                                    });
+                                                }
+                                            }
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .inset_0()
+                                    .size_full(),
+                                ),
+                            ),
                     ),
             )
-            .child(results)
+            .child(
+                gpui_kit::base::Scrollbar::vertical(&self.scroll)
+                    .viewport_from_layout()
+                    .mode(gpui_kit::base::ScrollbarMode::Always),
+            )
     }
 }
 
@@ -1532,25 +1656,53 @@ impl Render for AlbumPage {
                     .and_then(|album| album.artwork_url.clone())
             });
         let palette = appearance::Appearance::palette(cx);
-        let detail = self.album.as_ref().map_or_else(
-            || "Spotify album".to_owned(),
-            |album| {
-                let artists = album
-                    .artists
-                    .iter()
-                    .map(|artist| artist.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let mut details = vec![artists];
-                if let Some(year) = album.release_date.as_deref().and_then(|date| date.get(..4)) {
-                    details.push(year.to_owned());
+        let mut detail = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_1()
+            .text_size(tokens::BODY_TEXT)
+            .text_color(rgb(palette.text_muted));
+        if let Some(album) = &self.album {
+            for (index, artist) in album.artists.iter().enumerate() {
+                if index > 0 {
+                    detail = detail.child(",");
                 }
-                if let Some(track_count) = album.track_count {
-                    details.push(format!("{track_count} tracks"));
+                detail = detail.child(if artist.source_id.is_some() {
+                    components::button(palette, ("album-artist", index))
+                        .test_support()
+                        .min_w_0()
+                        .hover(|style| style.underline().text_color(rgb(palette.text_primary)))
+                        .child(artist.name.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(artist) = this
+                                .album
+                                .as_ref()
+                                .and_then(|album| album.artists.get(index))
+                            {
+                                cx.emit(PageEvent::OpenArtist(artist.clone()));
+                            }
+                        }))
+                        .into_any_element()
+                } else {
+                    div().child(artist.name.clone()).into_any_element()
+                });
+            }
+            if let Some(year) = album.release_date.as_deref().and_then(|date| date.get(..4)) {
+                if !album.artists.is_empty() {
+                    detail = detail.child("·");
                 }
-                details.join(" · ")
-            },
-        );
+                detail = detail.child(year.to_owned());
+            }
+            if let Some(count) = album.track_count {
+                if !album.artists.is_empty() || album.release_date.is_some() {
+                    detail = detail.child("·");
+                }
+                detail = detail.child(format!("{count} tracks"));
+            }
+        } else {
+            detail = detail.child("Spotify album");
+        }
         let tracks = self.tracks.clone();
         let loaded = self.loaded;
         let list = if let Some(error) = self.error.as_ref() {
@@ -1612,7 +1764,7 @@ impl Render for AlbumPage {
                             .items_start()
                             .gap_2()
                             .child(components::page_title(palette, name))
-                            .child(components::page_detail(palette, detail))
+                            .child(detail)
                             .child(
                                 components::pill(palette, "album-play", "Play", true).on_click(
                                     cx.listener(move |this, _, _, cx| {
@@ -1639,6 +1791,45 @@ fn page_header() -> Div {
 #[cfg(test)]
 mod retained_page_tests {
     use super::*;
+    #[test]
+    fn clearing_or_replacing_search_releases_the_hidden_track_list_and_all_result_arrays() {
+        let mut cx = gpui_kit::HeadlessAppContext::with_asset_source(
+            Arc::new(gpui_kit::NoopTextSystem),
+            Arc::new(assets::CadenceAssets),
+        );
+        cx.update(|cx| {
+            let _probe = crate::app::test_support::initialize(cx, ThemePreference::Dark);
+            let page = cx.new(|cx| SearchPage::new(services::AppServices::backend(cx), cx));
+            for replacing in [false, true] {
+                let tracks: Arc<[model::Track]> = vec![crate::app::test_support::track(0)].into();
+                let weak = Arc::downgrade(&tracks);
+                let results = crate::app::test_support::gallery_results();
+                let artists: Arc<[model::Artist]> = results.artists.into();
+                let albums: Arc<[model::Album]> = results.albums.into();
+                let weak_artists = Arc::downgrade(&artists);
+                let weak_albums = Arc::downgrade(&albums);
+                page.update(cx, |page, cx| {
+                    page.artists = artists;
+                    page.albums = albums;
+                    page.tracks = tracks;
+                    page.track_list
+                        .update(cx, |list, cx| list.show("search", page.tracks.clone(), cx));
+                    if replacing {
+                        page.set_query("next".into(), cx);
+                        assert!(page.submit(cx));
+                    } else {
+                        page.clear(cx);
+                    }
+                });
+                assert!(
+                    weak.upgrade().is_none(),
+                    "hidden track list retained a cleared search"
+                );
+                assert!(weak_artists.upgrade().is_none());
+                assert!(weak_albums.upgrade().is_none());
+            }
+        });
+    }
 
     #[test]
     fn navigating_away_releases_oversized_album_metadata_even_before_the_next_reply() {

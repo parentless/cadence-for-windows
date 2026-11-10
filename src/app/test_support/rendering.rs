@@ -39,6 +39,7 @@ enum Scene {
     CachedSearch,
     PlaybackPending,
     SearchArtists,
+    SearchGalleryScrolled,
     ShuffleOn,
     PlaylistTooltip,
     Queue {
@@ -83,6 +84,7 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("search-cached", Scene::CachedSearch),
         ("playback-pending", Scene::PlaybackPending),
         ("search-artists", Scene::SearchArtists),
+        ("search-gallery-scrolled", Scene::SearchGalleryScrolled),
         ("shuffle-on", Scene::ShuffleOn),
         ("sidebar-tooltip", Scene::PlaylistTooltip),
         (
@@ -248,7 +250,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(pixels)]))));
                     workspace.open_album(model::AlbumRef { name: "Blue hours".into(), source_id: Some("blue-album".into()), artwork_url: Some(url.into()), ..Default::default() }, Route::LikedSongs, cx);
                     let BackendCommand::LoadAlbum { respond, .. } = backend.commands.try_recv().unwrap() else { panic!() };
-                    respond.send(Ok((model::Album { provider: model::Provider::Spotify, source_id: "blue-album".into(), spotify_uri: None, name: "Blue hours".into(), artists: vec![], release_date: Some("2026-01-01".into()), artwork_url: Some(url.into()), track_count: Some(30) }, (0..30).map(track).collect()))).unwrap();
+                    respond.send(Ok((model::Album { provider: model::Provider::Spotify, source_id: "blue-album".into(), spotify_uri: None, name: "Blue hours".into(), artists: vec![model::ArtistRef { name: "Cadence Ensemble".into(), source_id: Some("ensemble".into()), spotify_uri: None }], release_date: Some("2026-01-01".into()), artwork_url: Some(url.into()), track_count: Some(30) }, (0..30).map(track).collect()))).unwrap();
                 }
                 Scene::ReadmeGlaive | Scene::ReadmeGlaiveDocked => {
                     let path = std::env::var("CADENCE_README_FIXTURE").expect("README fixture path");
@@ -313,18 +315,14 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                         _ => panic!("expected playlist request"),
                     }
                 }
-                Scene::SearchArtists => {
+                Scene::SearchArtists | Scene::SearchGalleryScrolled => {
                     workspace.search.update(cx, |search, cx| {
-                        search.set_query("glaive".into(), cx);
+                        search.set_query("gla".into(), cx);
                         search.submit(cx);
                     });
                     workspace.navigate(Route::Search, cx);
                     let BackendCommand::SearchCatalog { respond, .. } = backend.commands.try_recv().unwrap() else { panic!("search request") };
-                    respond.send(Ok(model::CatalogSearchResults {
-                        artists: ["glaive", "glaive radio", "glaive ensemble"].into_iter().enumerate().map(|(index, name)| model::Artist {
-                            provider: model::Provider::Spotify, source_id: format!("artist-{index}"), spotify_uri: None, name: name.into(), artwork_url: None,
-                        }).collect(), tracks: (0..10).map(track).collect(), playlists: vec![],
-                    })).unwrap();
+                    respond.send(Ok(super::gallery_results())).unwrap();
                 }
                 Scene::PlaybackPending => { services::AppServices::player(cx).update(cx, |player, cx| player.set_loading(true, cx)); }
                 Scene::ShuffleOn => { services::AppServices::player(cx).update(cx, |player, cx| player.toggle_shuffle(cx)); }
@@ -398,6 +396,32 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             })
             .unwrap();
             settle(&mut cx, handle.into());
+        }
+        Scene::SearchGalleryScrolled => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.dispatch_event(
+                    gpui_kit::ScrollWheelEvent {
+                        position: window.find("search-scroll").bounds().center(),
+                        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-1200.))),
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+            cx.update_window(handle.into(), |_, window, _| {
+                let last = window
+                    .find(("spotify-track", model::SEARCH_TRACK_LIMIT - 1))
+                    .bounds();
+                let viewport = window.find("search-scroll").bounds();
+                assert!(
+                    last.top() >= viewport.top() && last.bottom() <= viewport.bottom(),
+                    "last Gallery song is not reachable"
+                );
+            })
+            .unwrap();
         }
         Scene::SettingsCache => {
             cx.update_window(handle.into(), |_, window, cx| {

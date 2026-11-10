@@ -85,7 +85,7 @@ update files.
 - **Ctrl+K** searches, **Ctrl+W** closes the window, **Ctrl+Q** quits, and **Space**
   toggles playback when focus is outside a text field or control.
 - The standard Windows title bar provides drag, minimize, maximize, and close.
-- Track lists use bottom row separators without an enclosing outline. Artwork
+- Track lists share borderless rows with fixed gaps and rounded hover/selection fills. Artwork
   has no outline and uses fixed square frames with aspect-preserving cropping.
 - Artist pages use a dark grey background, rounded-corner portraits, and a
   blurred image header fading into the page. The blur is generated off the UI
@@ -220,3 +220,8 @@ The executable embeds Inter and loads the same font family/weights as the
 native previews. No font installation is needed. Windows and macOS still use
 different rasterizers, and monitor scaling, HDR and colour profiles can affect
 the appearance. The app uses the same theme colour values on both platforms.
+
+Submitted search shows a bounded Gallery of Top Artists, Top Albums, and Songs,
+with one shared scroll area and no public-playlist discovery. Album header
+artist names open their profiles using the loaded Spotify IDs. Closing the last
+Windows window exits Cadence, stopping playback and its background services.

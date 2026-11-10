@@ -169,10 +169,14 @@ pub struct PlaylistTrackPage {
     pub total: u32,
 }
 
+pub const SEARCH_ARTIST_LIMIT: usize = 3;
+pub const SEARCH_ALBUM_LIMIT: usize = 4;
+pub const SEARCH_TRACK_LIMIT: usize = 5;
+
 /// Bounded catalog results from one combined Spotify search request.
 #[derive(Debug, Default)]
 pub struct CatalogSearchResults {
     pub artists: Vec<Artist>,
+    pub albums: Vec<Album>,
     pub tracks: Vec<Track>,
-    pub playlists: Vec<Playlist>,
 }

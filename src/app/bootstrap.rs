@@ -23,11 +23,11 @@ pub(super) fn run() {
     let credentials_expected = preferences_store
         .as_ref()
         .is_some_and(stored_credentials_expected);
-    // Match macOS's background playback lifetime on Windows too: GPUI's
-    // default on Windows quits as soon as its last visible window closes.
+    // Use native lifetime rules: closing the last Windows window quits,
+    // while macOS keeps the app available through its Dock/menu bar.
     let app = gpui_kit::application()
         .with_assets(assets::CadenceAssets)
-        .with_quit_mode(gpui_kit::QuitMode::Explicit);
+        .with_quit_mode(gpui_kit::QuitMode::Default);
     // Clicking the Dock icon with no window open puts one back over the
     // services that kept playing in the meantime.
     app.on_reopen(|cx| {

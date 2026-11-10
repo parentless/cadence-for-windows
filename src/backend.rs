@@ -2591,14 +2591,22 @@ impl CatalogFetches {
 
     fn start<T: Send + 'static>(
         slot: &mut Option<tokio::task::JoinHandle<()>>,
-        respond: Reply<T>,
+        mut respond: Reply<T>,
         operation: &'static str,
         request: impl Future<Output = Result<T>> + Send + 'static,
     ) {
         abort_task(slot);
         *slot = Some(tokio::spawn(async move {
-            let _ =
-                respond.send(run_with_timeout(CATALOG_TIMEOUT_SECONDS, operation, request).await);
+            // These are read-only catalog fetches. A page dropping its reply
+            // receiver cancels the HTTP future, including a rate-limit wait.
+            // Writes use separate workers and must finish even without a view.
+            tokio::select! {
+                biased;
+                _ = respond.closed() => {}
+                result = run_with_timeout(CATALOG_TIMEOUT_SECONDS, operation, request) => {
+                    let _ = respond.send(result);
+                }
+            }
         }));
     }
 
@@ -3204,6 +3212,32 @@ mod tests {
     };
     use crate::model::{AlbumRef, ArtistRef, Provider, Track};
     use crate::storage::Store;
+
+    #[tokio::test]
+    async fn abandoning_catalog_reply_cancels_the_request_future() {
+        let (reply, receiver) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped, dropped_rx) = tokio::sync::oneshot::channel();
+        struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let mut slot = None;
+        super::CatalogFetches::start(&mut slot, reply, "test", async move {
+            let _guard = DropSignal(Some(dropped));
+            started.send(()).unwrap();
+            std::future::pending::<anyhow::Result<()>>().await
+        });
+        started_rx.await.unwrap();
+        drop(receiver);
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        slot.take().unwrap().await.unwrap();
+    }
 
     fn favorite() -> Track {
         Track {

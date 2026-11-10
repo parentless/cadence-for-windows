@@ -942,45 +942,52 @@ fn row_artwork_is_plain_and_legacy_credits_stay_plain() {
 }
 
 #[test]
-fn track_artist_links_work_inside_an_album_without_playing() {
-    let mut fixture = Fixture::new(false);
-    let workspace = fixture.workspace.clone().unwrap();
-    fixture.update(|_, cx| {
-        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
-            workspace.open_album(credited_track().album_ref.unwrap(), Route::LikedSongs, cx);
-        })
-    });
-    let BackendCommand::LoadAlbum { respond, .. } = fixture.backend.commands.try_recv().unwrap()
-    else {
-        panic!("album request")
-    };
-    respond
-        .send(Ok((
-            model::Album {
-                provider: model::Provider::Spotify,
-                source_id: "album-grease".into(),
-                spotify_uri: None,
-                name: "Grease".into(),
-                artists: credited_track().artists,
-                release_date: None,
-                artwork_url: None,
-                track_count: Some(1),
-            },
-            vec![credited_track()],
-        )))
-        .unwrap();
-    fixture.update(|_, _| {});
-    fixture.update(|window, cx| {
-        assert!(
-            window.try_find(("track-artwork", 0usize)).is_none(),
-            "album rows must not construct redundant cover elements"
-        );
-        window
-            .within(("spotify-track", 0usize))
-            .click(("track-artist", 1usize), cx)
-    });
-    assert_eq!(fixture.requested_artist(), "artist-seasons");
-    fixture.no_commands();
+fn track_and_header_artist_links_work_inside_an_album_without_playing() {
+    for header in [false, true] {
+        let mut fixture = Fixture::new(false);
+        let workspace = fixture.workspace.clone().unwrap();
+        fixture.update(|_, cx| {
+            workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+                workspace.open_album(credited_track().album_ref.unwrap(), Route::LikedSongs, cx);
+            })
+        });
+        let BackendCommand::LoadAlbum { respond, .. } =
+            fixture.backend.commands.try_recv().unwrap()
+        else {
+            panic!("album request")
+        };
+        respond
+            .send(Ok((
+                model::Album {
+                    provider: model::Provider::Spotify,
+                    source_id: "album-grease".into(),
+                    spotify_uri: None,
+                    name: "Grease".into(),
+                    artists: credited_track().artists,
+                    release_date: None,
+                    artwork_url: None,
+                    track_count: Some(1),
+                },
+                vec![credited_track()],
+            )))
+            .unwrap();
+        fixture.update(|_, _| {});
+        fixture.update(|window, cx| {
+            assert!(
+                window.try_find(("track-artwork", 0usize)).is_none(),
+                "album rows must not construct redundant cover elements"
+            );
+            if header {
+                window.click(("album-artist", 1usize), cx);
+            } else {
+                window
+                    .within(("spotify-track", 0usize))
+                    .click(("track-artist", 1usize), cx);
+            }
+        });
+        assert_eq!(fixture.requested_artist(), "artist-seasons");
+        fixture.no_commands();
+    }
 }
 
 #[test]
@@ -1000,7 +1007,7 @@ fn search_track_album_links_use_loaded_metadata_without_searching_again() {
         .send(Ok(model::CatalogSearchResults {
             artists: vec![],
             tracks: vec![credited_track()],
-            playlists: vec![],
+            albums: vec![],
         }))
         .unwrap();
     fixture.update(|_, _| {});
@@ -2740,7 +2747,7 @@ fn search_places_artists_above_tracks_and_opens_the_selected_artist() {
                 artwork_url: None,
             }],
             tracks: vec![track(0)],
-            playlists: vec![],
+            albums: vec![],
         }))
         .unwrap();
     fixture.update(|_, _| {});
@@ -3277,4 +3284,70 @@ fn initial_playlist_failure_replaces_skeletons_and_can_retry_without_scrolling()
         assert!(window.try_find(("spotify-track", 0usize)).is_some());
     });
     fixture.no_commands();
+}
+
+#[test]
+fn gallery_shares_one_scroll_area_and_opens_albums_without_prefetching() {
+    for width in [900., 1280.] {
+        let mut fixture = Fixture::at_width(width);
+        fixture.update(|window, cx| {
+            window.click("search-input", cx);
+            window.input("gla", cx);
+            window.press("enter", cx);
+        });
+        let BackendCommand::SearchCatalog { respond, .. } =
+            fixture.backend.commands.try_recv().unwrap()
+        else {
+            panic!("search request")
+        };
+        respond.send(Ok(super::gallery_results())).unwrap();
+        fixture.update(|_, _| {});
+        fixture.no_commands();
+        let old_heading = fixture.update(|window, cx| {
+            assert!(window.try_find("tab-playlists").is_none());
+            assert!(
+                window
+                    .try_find(("spotify-track", model::SEARCH_TRACK_LIMIT))
+                    .is_none()
+            );
+            assert!(
+                window.find("search-artists-heading").bounds().top()
+                    < window.find("search-albums-heading").bounds().top()
+            );
+            assert!(
+                window.find("search-albums-heading").bounds().top()
+                    < window.find("search-songs-heading").bounds().top()
+            );
+            let viewport = window.find("search-scroll").bounds();
+            for (id, count) in [("search-artist", 3usize), ("search-album", 4usize)] {
+                for index in 0..count {
+                    let bounds = window.find((id, index)).bounds();
+                    assert!(
+                        bounds.left() >= viewport.left() && bounds.right() < viewport.right(),
+                        "card overflows at width {width}: {bounds:?}"
+                    );
+                }
+            }
+            let before = window.find("search-artists-heading").bounds().top();
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position: window.find(("search-artist", 0usize)).bounds().center(),
+                    delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-160.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            before
+        });
+        fixture.update(|window, cx| {
+            assert!(
+                window.find("search-artists-heading").bounds().top() < old_heading,
+                "wheel over artist did not scroll the page"
+            );
+            window.click(("search-album", 0usize), cx);
+        });
+        assert_eq!(fixture.requested_album(), "album-0");
+        fixture.no_commands();
+    }
 }

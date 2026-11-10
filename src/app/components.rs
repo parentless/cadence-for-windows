@@ -433,8 +433,29 @@ pub(super) fn artwork(
     artwork_size: tokens::ArtworkSize,
     fallback_icon: CadenceIcon,
 ) -> gpui_kit::AnyElement {
+    rectangular_artwork(
+        palette,
+        image_cache,
+        url,
+        artwork_size,
+        artwork_size.size,
+        fallback_icon,
+    )
+}
+
+/// Fixed external dimensions keep source image proportions out of layout.
+/// Search portraits use a wide frame; cache decoding still follows its short edge.
+pub(super) fn rectangular_artwork(
+    palette: CadencePalette,
+    image_cache: &Entity<image_cache::BoundedImageCache>,
+    url: Option<&str>,
+    artwork_size: tokens::ArtworkSize,
+    width: Rems,
+    fallback_icon: CadenceIcon,
+) -> gpui_kit::AnyElement {
     let frame = div()
-        .size(artwork_size.size)
+        .w(width)
+        .h(artwork_size.size)
         .relative()
         .flex_none()
         .rounded(artwork_size.radius)
@@ -446,20 +467,20 @@ pub(super) fn artwork(
                     let cache = image_cache.clone();
                     let resource = gpui_kit::Resource::Uri(url.to_owned().into());
                     move |window: &mut Window, cx: &mut App| {
-                        let physical = f32::from(artwork_size.size.to_pixels(window.rem_size()))
-                            * window.scale_factor();
+                        let physical = f32::from(
+                            Rems(width.0.min(artwork_size.size.0)).to_pixels(window.rem_size()),
+                        ) * window.scale_factor();
                         cache.update(cx, |cache, cx| {
                             cache.load_sized(&resource, physical.ceil() as u32, window, cx)
                         })
                     }
                 })
                 // Absolute dimensions keep intrinsic portrait/wide image
-                // ratios from influencing the square artwork's layout.
+                // ratios from influencing the artwork frame's layout.
                 .absolute()
                 .inset_0()
-                .size(artwork_size.size)
+                .size_full()
                 .flex_none()
-                .aspect_ratio(1.)
                 .rounded(artwork_size.radius)
                 .object_fit(gpui_kit::ObjectFit::Cover),
             )

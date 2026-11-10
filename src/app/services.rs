@@ -6,8 +6,8 @@ const LIBRARY_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 /// Services that outlive any single window.
 ///
-/// Closing the Cadence window must not interrupt playback, so the backend is
-/// owned here instead of by the view that happens to be on screen.
+/// The backend survives view replacement and macOS window closure. On Windows,
+/// closing the last window invokes app shutdown and releases these services.
 pub(super) struct AppServices {
     /// Taken during shutdown so the worker thread stops before the process exits.
     backend: Option<Backend>,
@@ -113,8 +113,8 @@ impl AppServices {
         cx.on_window_closed(|cx, _| {
             Self::prune_closed_windows(cx);
             if cx.windows().is_empty() {
-                // The window owned the live position; persist it while the
-                // services keep playing without one.
+                // Persist the final position before Windows quits, or before
+                // macOS continues without a window.
                 Self::player(cx).read(cx).save_position();
             }
         })

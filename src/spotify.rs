@@ -405,10 +405,11 @@ impl Spotify {
                 .client
                 .search_multiple(
                     query,
-                    [SearchType::Artist, SearchType::Track, SearchType::Playlist],
+                    [SearchType::Artist, SearchType::Track, SearchType::Album],
                     None,
                     None,
-                    Some(10),
+                    // Five is the largest displayed Gallery section.
+                    Some(5),
                     None,
                 )
                 .await?;
@@ -417,7 +418,7 @@ impl Spotify {
                     .artists
                     .into_iter()
                     .flat_map(|page| page.items)
-                    .take(3)
+                    .take(crate::model::SEARCH_ARTIST_LIMIT)
                     .map(convert_artist)
                     .collect(),
                 tracks: results
@@ -427,12 +428,14 @@ impl Spotify {
                     .filter(|track| !track.is_local && track.id.is_some())
                     .filter_map(|track| convert_track(track).ok())
                     .filter(Track::is_displayable)
+                    .take(crate::model::SEARCH_TRACK_LIMIT)
                     .collect(),
-                playlists: results
-                    .playlists
+                albums: results
+                    .albums
                     .into_iter()
                     .flat_map(|page| page.items)
-                    .map(convert_playlist)
+                    .filter_map(convert_simplified_album)
+                    .take(crate::model::SEARCH_ALBUM_LIMIT)
                     .collect(),
             })
         })
@@ -1145,6 +1148,52 @@ mod tests {
             gate: Arc::default(),
             top_tracks_unavailable: Arc::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn gallery_search_uses_one_combined_request_without_playlists_and_bounds_each_section() {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let spotify = test_client(listener.local_addr().unwrap()).await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("GET /v1/search?"));
+            assert!(request.contains("type=artist%2Ctrack%2Calbum"), "{request}");
+            assert!(!request.contains("playlist"));
+            assert!(request.contains("limit=5"));
+            let artist = serde_json::json!({"external_urls":{}, "href":"", "id":"artist", "images":[], "name":"Artist"});
+            let album = serde_json::json!({"album_type":"album", "artists":[artist.clone()], "external_urls":{}, "id":"album", "images":[], "name":"Album", "release_date":"2026"});
+            let track = serde_json::json!({
+                "album":album.clone(), "artists":[artist.clone()], "disc_number":1, "duration_ms":120000,
+                "explicit":false, "external_ids":{}, "external_urls":{}, "id":"track", "is_local":false,
+                "name":"Song", "track_number":1, "type":"track"
+            });
+            let page = |value| serde_json::json!({"href":"", "items":vec![value;10], "limit":10, "next":null,"offset":0,"previous":null,"total":10});
+            let body = serde_json::json!({"artists":page(artist),"albums":page(album),"tracks":page(track)}).to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            assert!(
+                timeout(Duration::from_millis(30), listener.accept())
+                    .await
+                    .is_err(),
+                "search prefetched a detail page"
+            );
+        });
+        let results = timeout(Duration::from_secs(3), spotify.search_catalog("gla"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(results.artists.len(), crate::model::SEARCH_ARTIST_LIMIT);
+        assert_eq!(results.albums.len(), crate::model::SEARCH_ALBUM_LIMIT);
+        assert_eq!(results.tracks.len(), crate::model::SEARCH_TRACK_LIMIT);
+        assert_eq!(
+            results.albums[0].artists[0].source_id.as_deref(),
+            Some("artist")
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

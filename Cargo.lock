@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "cadence"
-version = "0.8.15"
+version = "0.8.16"
 dependencies = [
  "anyhow",
  "async-channel",

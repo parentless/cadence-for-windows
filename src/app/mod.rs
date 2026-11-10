@@ -296,12 +296,6 @@ enum Route {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SearchKind {
-    Tracks,
-    Playlists,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConnectionState {
     Starting,
     Failed,

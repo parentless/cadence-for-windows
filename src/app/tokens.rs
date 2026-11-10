@@ -99,6 +99,6 @@ pub(super) const SIDEBAR_PLAYLIST_ARTWORK: ArtworkSize = ArtworkSize {
 };
 
 pub(super) const SEARCH_ARTIST_ARTWORK: ArtworkSize = ArtworkSize {
-    size: Rems(4.),
+    size: Rems(9.5),
     radius: Rems(0.75),
 };
