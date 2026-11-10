@@ -9,6 +9,8 @@ enum Scene {
     ArtistLoading,
     ArtistDiscography,
     TrackHover,
+    TrackIndexHover,
+    PlaylistDenied,
     TrackCredits,
     PinnedPlaylist,
     TrackMenu,
@@ -55,6 +57,8 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("artist-docked", Scene::ArtistDiscography),
         ("artist-loading", Scene::ArtistLoading),
         ("track-hover", Scene::TrackHover),
+        ("track-index-hover", Scene::TrackIndexHover),
+        ("playlist-denied", Scene::PlaylistDenied),
         ("track-credits", Scene::TrackCredits),
         ("playlist-pinned", Scene::PinnedPlaylist),
         ("track-menu", Scene::TrackMenu),
@@ -278,7 +282,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     workspace.library.update(cx, |library, cx| library.clear(cx));
                     workspace.navigate(Route::Playlists, cx);
                 }
-                Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed | Scene::PlaylistTooltip | Scene::PlaylistTail | Scene::PinnedPlaylist => {
+                Scene::PlaylistDenied | Scene::PlaylistTracks | Scene::PlaylistHover | Scene::PlaylistZoomSmall | Scene::PlaylistZoomLarge | Scene::PlaylistCollapsed | Scene::PlaylistTooltip | Scene::PlaylistTail | Scene::PinnedPlaylist => {
                     let artwork_url = "https://fixtures.invalid/sidebar-cover.png";
                     let cover = image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([45 + (x*2) as u8, 50 + (y*2) as u8, 160, 255]));
                     services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(artwork_url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(cover)]))));
@@ -301,7 +305,11 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     workspace.load_playlist(selected, cx);
                     workspace.navigate(Route::Playlist, cx);
                     match backend.commands.try_recv().expect("playlist request") {
-                        BackendCommand::LoadPlaylist { respond, .. } => { respond.send(Ok(model::PlaylistTrackPage { source_offsets: vec![], tracks: (0..15).map(track).collect(), next_offset: Some(15), total: 1000 })).unwrap(); }
+                        BackendCommand::LoadPlaylist { respond, .. } => {
+                            if matches!(scene, Scene::PlaylistDenied) {
+                                respond.send(Err(anyhow::anyhow!("Spotify denied access to this playlist. Development Mode apps can read tracks only in playlists you own or collaborate on. Save a copy to your library in Spotify, then open that copy here"))).unwrap();
+                            } else { respond.send(Ok(model::PlaylistTrackPage { source_offsets: vec![], tracks: (0..15).map(track).collect(), next_offset: Some(15), total: 1000 })).unwrap(); }
+                        }
                         _ => panic!("expected playlist request"),
                     }
                 }
@@ -441,6 +449,13 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     .to_platform_input(),
                     cx,
                 );
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+        }
+        Scene::TrackIndexHover => {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.hover(("track-index", 1usize), cx)
             })
             .unwrap();
             settle(&mut cx, handle.into());
@@ -759,6 +774,22 @@ pub(crate) fn run() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual/baseline"));
     let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-artifacts");
+    if std::env::args().any(|argument| argument == "--rail-polish-preview") {
+        let previews = artifacts.with_file_name("rail-polish-previews");
+        std::fs::create_dir_all(&previews).unwrap();
+        for (name, scene, width) in [
+            ("tooltip", Scene::PlaylistTooltip, 1280.),
+            ("tooltip-compact", Scene::PlaylistTooltip, 900.),
+            ("track-play", Scene::TrackIndexHover, 1280.),
+            ("playlist-denied", Scene::PlaylistDenied, 1280.),
+        ] {
+            let image = capture(scene, ThemePreference::Dark, width);
+            let repeated = capture(scene, ThemePreference::Dark, width);
+            assert!(compare(name, &image, &repeated, &previews));
+            save_artifact(&image, &previews.join(format!("{name}.png")));
+        }
+        return;
+    }
     if std::env::args().any(|argument| argument == "--catalog-polish-preview") {
         let previews = artifacts.with_file_name("catalog-polish-previews");
         std::fs::create_dir_all(&previews).expect("preview directory");

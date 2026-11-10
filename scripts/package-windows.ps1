@@ -17,8 +17,9 @@ try {
     if ($Profile -eq 'debug') { $name += '-debug' }
     if ($Label) { $name += "-$Label" }
     $staging = Join-Path $root "dist/$name"
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
-    Copy-Item -LiteralPath $binary -Destination "$staging/cadence.exe" -Force
+    Copy-Item -LiteralPath $binary -Destination "$staging/Cadence.exe" -Force
     Copy-Item -LiteralPath LICENSE, THIRD_PARTY_NOTICES.md -Destination $staging -Force
     Copy-Item -LiteralPath vendor/gpui-pre-windows/LICENSE-APACHE -Destination "$staging/GPUI-WINDOWS-LICENSE.txt" -Force
     Copy-Item -LiteralPath assets/fonts/LICENSE.txt -Destination "$staging/INTER-LICENSE.txt" -Force
@@ -27,7 +28,13 @@ try {
     # The updater downloads the standalone executable; the zip includes notices
     # and instructions for first-time installs.
     Copy-Item -LiteralPath $binary -Destination "dist/$name.exe" -Force
-    foreach ($file in @("dist/$name.exe", "dist/$name.zip")) {
+    # Keep the versioned alias for installed clients predating the portable name.
+    $executables = @("dist/$name.exe")
+    if ($Profile -eq 'release' -and !$Label) {
+        Copy-Item -LiteralPath $binary -Destination 'dist/Cadence.exe' -Force
+        $executables += 'dist/Cadence.exe'
+    }
+    foreach ($file in ($executables + @("dist/$name.zip"))) {
         $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $(Split-Path -Leaf $file)`n" | Set-Content -LiteralPath "$file.sha256" -Encoding ascii -NoNewline
     }

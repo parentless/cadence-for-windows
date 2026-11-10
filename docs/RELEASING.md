@@ -25,6 +25,10 @@ match the Cargo version; do not publish a competing release by hand.
 Keep old public GitHub releases for users and rollback. Local packaging clears
 superseded Windows files in `dist` only after generating a replacement.
 
+The standalone download and executable inside the ZIP are named `Cadence.exe`.
+A versioned executable alias and checksum remain available for older installed
+updaters. Both executables contain identical optimized bytes.
+
 ## In-app updater
 
 The app checks the public repository's latest stable release 15 seconds after

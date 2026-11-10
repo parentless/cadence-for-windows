@@ -382,6 +382,9 @@ impl PlaylistPage {
                 .await;
             let _ = page.update(cx, |page, cx| {
                 page.viewport_request = None;
+                if page.error.is_some() || page.play_on_load {
+                    return;
+                }
                 let missing = page
                     .tracks
                     .borrow_mut()
@@ -395,7 +398,17 @@ impl PlaylistPage {
     }
 
     fn load_more(&mut self, cx: &mut Context<Self>) {
-        self.request_visible(self.visible_range.clone(), cx);
+        let visible = self
+            .tracks
+            .borrow_mut()
+            .missing_offset(self.visible_range.clone());
+        let offset = visible.or_else(|| self.tracks.borrow().missing_start());
+        if let (Some(playlist), Some(offset)) = (self.selected.clone(), offset) {
+            self.viewport_request = None;
+            self.error = None;
+            self.fetch_page(playlist, offset, cx);
+            cx.notify();
+        }
     }
 
     fn fetch_page(&mut self, playlist: model::Playlist, offset: u32, cx: &mut Context<Self>) {
@@ -1103,6 +1116,7 @@ impl Render for PlaylistPage {
         let tracks = self.tracks.clone();
         let loaded = self.loaded;
         let empty = tracks.borrow().is_empty();
+        let has_tracks = tracks.borrow().tracks().next().is_some();
         let pinned = self
             .selected
             .as_ref()
@@ -1126,7 +1140,7 @@ impl Render for PlaylistPage {
             .as_ref()
             .and_then(|playlist| playlist.artwork_url.clone());
         let palette = appearance::Appearance::palette(cx);
-        let list = if let Some(error) = self.error.as_deref().filter(|_| empty) {
+        let list = if let Some(error) = self.error.as_deref().filter(|_| !has_tracks) {
             components::empty_state(palette, format!("Unable to load playlist: {error}"))
                 .into_any_element()
         } else if let Some(playlist) = self.selected.as_ref().filter(|_| !empty) {
@@ -1151,15 +1165,21 @@ impl Render for PlaylistPage {
             components::list_skeleton(palette).into_any_element()
         };
         let list = div().flex_1().min_h_0().flex().flex_col().child(list).when(
-            self.error.is_some() && !empty,
+            self.error.is_some(),
             |container| {
                 container.child(
                     components::button(palette, "playlist-retry-page")
                         .test_support()
                         .h_10()
-                        .child("Couldn't load more tracks · Retry")
+                        .child("Retry loading tracks")
+                        .tooltip({
+                            let error = self.error.clone().unwrap_or_default();
+                            move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(error.clone())
+                                    .build(window, cx)
+                            }
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.error = None;
                             this.load_more(cx);
                         })),
                 )

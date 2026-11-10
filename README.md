@@ -23,8 +23,8 @@ and author attribution are preserved. macOS source support remains available.
 
 ## Windows downloads and updates
 
-Open the [Releases](https://github.com/parentless/cadence-for-windows/releases/latest) page for the optimized Windows x86-64 EXE
-or portable ZIP. These are release builds with thin LTO, an embedded C runtime,
+Download the optimized Windows x86-64 [Cadence.exe](https://github.com/parentless/cadence-for-windows/releases/latest/download/Cadence.exe)
+or get the portable ZIP from [Releases](https://github.com/parentless/cadence-for-windows/releases/latest). These are release builds with thin LTO, an embedded C runtime,
 assets and precompiled GPUI shaders. The target computer needs no Rust toolchain
 or Spotify desktop app. Spotify Premium and your own Spotify developer Client
 ID are required; the app guides you through setup.

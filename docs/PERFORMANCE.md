@@ -92,3 +92,24 @@ solid seam layers in a smaller area near Popular; no new image processing pass
 is added. Pending playback keeps a static play/pause icon rather than running a
 spinner. These changes add small, bounded suggestion state and transient search
 work during typing; they do not establish a measured zero-cost CPU/GPU claim.
+
+# Rail and playlist recovery (0.8.13)
+
+Collapsed-sidebar labels reuse one trigger-bounds cell per sidebar. Their native
+hover lifecycle positions a single tooltip at the trigger's center with no
+additional animation, polling or idle frame requests. Track numbers and play
+controls share a fixed 44 by 32 logical-pixel area at 100% zoom. GPU opacity
+styles switch the glyph on hover without changing row layout or creating a task.
+Play callbacks share their existing allocation between row and index activation.
+Track covers no longer create navigation controls.
+
+Failed playlist pages stop requesting until an explicit retry. An initial
+failure shows the actual error instead of a logical playlist full of skeletons;
+retry requests the missing visible page (or the first page before layout) once.
+The existing 100 ms scroll debounce, eight-page/120-track cache, cancellation,
+Spotify throttling gate and playback window bounds remain in place. A 403
+response explains Spotify's owner/collaborator restriction without retrying or
+trying to work around it. No new network request is added to successful loads.
+
+These are code bounds and regression checks, not a Windows CPU/GPU or long-run
+RAM measurement. No claim of zero overhead or a measured speedup is made.

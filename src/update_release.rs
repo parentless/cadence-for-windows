@@ -68,13 +68,23 @@ fn release_assets(
     if newest <= version(current).context("invalid installed version")? {
         return Ok(None);
     }
-    let name = format!(
+    let legacy_name = format!(
         "cadence-{}-windows-x86_64.exe",
         release
             .tag_name
             .strip_prefix('v')
             .unwrap_or(&release.tag_name)
     );
+    // Prefer the portable download name, retaining old-release compatibility.
+    let name = if release
+        .assets
+        .iter()
+        .any(|asset| asset.name == "Cadence.exe")
+    {
+        "Cadence.exe".to_owned()
+    } else {
+        legacy_name
+    };
     let url = format!(
         "https://github.com/{repository}/releases/download/{}/{name}",
         release.tag_name
@@ -170,6 +180,20 @@ mod tests {
             {"name":"cadence-0.9.0-windows-x86_64.exe.sha256", "browser_download_url":"https://github.com/owner/cadence-for-windows/releases/download/v0.9.0/cadence-0.9.0-windows-x86_64.exe.sha256"}
         ]})
     }
+    #[test]
+    fn portable_asset_is_preferred_and_validated_even_with_legacy_aliases() {
+        let mut value = metadata();
+        let assets = value["assets"].as_array_mut().unwrap();
+        for name in ["Cadence.exe", "Cadence.exe.sha256"] {
+            assets.push(serde_json::json!({"name":name, "browser_download_url":format!("https://github.com/owner/cadence-for-windows/releases/download/v0.9.0/{name}")}));
+        }
+        let (_, url, checksum) = parse(value.clone(), "0.8.12").unwrap().unwrap();
+        assert!(url.ends_with("/Cadence.exe"));
+        assert!(checksum.ends_with("/Cadence.exe.sha256"));
+        value["assets"][2]["browser_download_url"] = "https://evil.invalid/Cadence.exe".into();
+        assert!(parse(value, "0.8.12").is_err());
+    }
+
     fn parse(value: serde_json::Value, current: &str) -> Result<Option<(String, String, String)>> {
         release_assets(
             &serde_json::to_vec(&value)?,

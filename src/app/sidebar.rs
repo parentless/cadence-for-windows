@@ -70,6 +70,7 @@ pub(super) struct Sidebar {
     library: Entity<library::Library>,
     brand_mark: Arc<gpui_kit::Image>,
     image_cache: Entity<image_cache::BoundedImageCache>,
+    tooltip_anchor: Rc<Cell<Bounds<Pixels>>>,
     playlist_hover: components::HoverHighlight,
     playlist_source: Arc<[model::Playlist]>,
     playlist_order: Arc<[usize]>,
@@ -123,6 +124,7 @@ impl Sidebar {
         Self {
             library: services::AppServices::library(cx),
             image_cache: services::AppServices::image_cache(cx),
+            tooltip_anchor: Rc::new(Cell::new(Bounds::default())),
             playlist_hover: components::HoverHighlight::default(),
             playlist_source: Arc::from([]),
             playlist_order: Arc::from([]),
@@ -333,11 +335,7 @@ impl Sidebar {
                 cx.notify();
             }))
             .when(self.collapsed, |row| {
-                row.tooltip_show_delay(Duration::ZERO)
-                    .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(item_label(index))
-                            .build(window, cx)
-                    })
+                rail_tooltip(row, item_label(index).into(), self.tooltip_anchor.clone())
             })
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::Navigate(target))))
             .into_any_element()
@@ -530,13 +528,10 @@ impl Sidebar {
                                         )
                                     })
                                     .when(collapsed, |row| {
-                                        row.tooltip_show_delay(Duration::ZERO).tooltip(
-                                            move |window, cx| {
-                                                gpui_kit::component::tooltip::Tooltip::new(
-                                                    label.clone(),
-                                                )
-                                                .build(window, cx)
-                                            },
+                                        rail_tooltip(
+                                            row,
+                                            label.clone(),
+                                            this.tooltip_anchor.clone(),
                                         )
                                     })
                                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -765,5 +760,59 @@ impl Sidebar {
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.panel(window, cx)
+    }
+}
+
+/// Native pointer tooltips use the pointer's bottom-right corner. Rail labels
+/// instead follow the trigger's current layout, including scrolling/reordering.
+/// One view exists only while hovered; no animation or timer is added.
+fn rail_tooltip<E: StatefulInteractiveElement + gpui_kit::component::ElementExt>(
+    row: E,
+    label: SharedString,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
+) -> E {
+    let writer = bounds.clone();
+    row.on_prepaint(move |value, window, _| {
+        if value.contains(&window.mouse_position()) {
+            writer.set(value);
+        }
+    })
+    .tooltip_show_delay(Duration::ZERO)
+    .tooltip(move |_, cx| {
+        cx.new(|_| RailTooltip {
+            bounds: bounds.clone(),
+            label: label.clone(),
+        })
+        .into()
+    })
+}
+
+struct RailTooltip {
+    bounds: Rc<Cell<Bounds<Pixels>>>,
+    label: SharedString,
+}
+
+impl Render for RailTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = appearance::Appearance::palette(cx);
+        let bounds = self.bounds.get();
+        gpui_kit::base::Positioner::side(bounds)
+            .placement(gpui_kit::base::Placement::Right)
+            .offset(px(8.))
+            .child(
+                div()
+                    .id("sidebar-tooltip")
+                    .test_support()
+                    .max_w(Rems(22.))
+                    .py(Rems(0.375))
+                    .px_3()
+                    .line_height(Rems(1.25))
+                    .rounded_md()
+                    .bg(rgb(palette.surface_raised))
+                    .text_color(rgb(palette.text_primary))
+                    .text_size(Rems(0.875))
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .child(div().max_w(Rems(20.5)).child(self.label.clone())),
+            )
     }
 }

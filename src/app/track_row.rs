@@ -28,7 +28,13 @@ pub(super) fn track_list_header(palette: CadencePalette, compact: bool) -> impl 
         .text_size(tokens::BODY_TEXT)
         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
         .text_color(rgb(palette.text_muted))
-        .child(div().w(INDEX_COLUMN_WIDTH).flex_none().child("#"))
+        .child(
+            div()
+                .w(INDEX_COLUMN_WIDTH)
+                .flex_none()
+                .text_center()
+                .child("#"),
+        )
         .child(div().flex_1().min_w_0().pr(COLUMN_GUTTER).child("Title"))
         .when(!compact, |header| {
             header.child(div().flex_1().min_w_0().child("Album"))
@@ -75,7 +81,7 @@ pub(super) enum TrackNavigation {
 
 type NavigationCallback = Rc<dyn Fn(&TrackNavigation, &mut Window, &mut App)>;
 
-type RowCallback = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type RowCallback = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type HoverCallback = Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
 type ContextCallback = Box<dyn Fn(&gpui_kit::MouseDownEvent, &mut Window, &mut App) + 'static>;
 
@@ -176,7 +182,7 @@ impl TrackRow {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.playing = playing;
-        self.on_toggle_playback = Some(Box::new(handler));
+        self.on_toggle_playback = Some(Rc::new(handler));
         self
     }
 
@@ -194,7 +200,7 @@ impl TrackRow {
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_play = Some(Box::new(handler));
+        self.on_play = Some(Rc::new(handler));
         self
     }
 
@@ -281,7 +287,7 @@ impl TrackRow {
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_favorite = Some(Box::new(handler));
+        self.on_favorite = Some(Rc::new(handler));
         self
     }
 
@@ -354,25 +360,15 @@ impl RenderOnce for TrackRow {
             album_text
         };
         let artwork = (!self.hide_artwork).then(|| {
-            let artwork = components::artwork(
+            components::artwork(
                 palette,
                 &self.image_cache,
                 self.track.artwork_url.as_deref(),
                 tokens::TRACK_ARTWORK,
                 CadenceIcon::MusicNote,
-            );
-            if album.is_some() {
-                self.navigation_link(
-                    ("track-artwork", index),
-                    TrackNavigation::Album,
-                    artwork,
-                    window,
-                    self.compact,
-                )
-            } else {
-                artwork
-            }
+            )
         });
+        let on_play = self.on_play;
         let row = components::row_button(palette, ("spotify-track", index))
             .test_support()
             .w_full()
@@ -388,40 +384,79 @@ impl RenderOnce for TrackRow {
             .when_some(self.on_hover, |row, handler| row.on_hover(handler))
             .child(
                 div()
+                    .id(("track-index", index))
+                    .test_support()
+                    .group("track-index")
+                    .relative()
                     .w(INDEX_COLUMN_WIDTH)
+                    .h_8()
                     .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .text_size(tokens::BODY_TEXT)
                     .text_color(rgb(palette.text_muted))
                     .when(!self.current, |column| {
-                        column.child((index + 1).to_string())
-                    })
-                    .when(self.current, |column| {
                         column.child(
-                            components::button(palette, ("track-playback-toggle", index))
-                                .test_support()
-                                .aria_label(if self.playing { "Pause" } else { "Play" })
-                                .w_full()
-                                .h_8()
-                                .rounded_md()
-                                .child(components::icon(
-                                    if self.playing {
-                                        CadenceIcon::Pause
-                                    } else {
-                                        CadenceIcon::Play
-                                    },
-                                    tokens::CONTROL_ICON,
-                                    palette.text_primary,
-                                ))
-                                .when_some(self.on_toggle_playback, |button, handler| {
-                                    button.on_click(move |event, window, cx| {
-                                        cx.stop_propagation();
-                                        if event.is_keyboard() || event.click_count() == 1 {
-                                            handler(event, window, cx);
-                                        }
-                                    })
-                                }),
+                            div()
+                                .group_hover("track-index", |style| style.opacity(0.))
+                                .child((index + 1).to_string()),
                         )
-                    }),
+                    })
+                    .child(
+                        components::button(
+                            palette,
+                            (
+                                if self.current {
+                                    "track-playback-toggle"
+                                } else {
+                                    "track-play"
+                                },
+                                index,
+                            ),
+                        )
+                        .test_support()
+                        .aria_label(if self.current && self.playing {
+                            "Pause"
+                        } else {
+                            "Play"
+                        })
+                        .absolute()
+                        .inset_0()
+                        .rounded_md()
+                        .when(!self.current, |button| {
+                            // The row already provides keyboard activation. The
+                            // pointer-only glyph adds no extra Tab stop per track.
+                            button
+                                .tab_stop(false)
+                                .opacity(0.)
+                                .group_hover("track-index", |style| style.opacity(1.))
+                        })
+                        .child(components::icon(
+                            if self.current && self.playing {
+                                CadenceIcon::Pause
+                            } else {
+                                CadenceIcon::Play
+                            },
+                            tokens::CONTROL_ICON,
+                            palette.text_primary,
+                        ))
+                        .when_some(
+                            if self.current {
+                                self.on_toggle_playback
+                            } else {
+                                on_play.clone()
+                            },
+                            |button, handler| {
+                                button.on_click(move |event, window, cx| {
+                                    cx.stop_propagation();
+                                    if event.is_keyboard() || event.click_count() == 1 {
+                                        handler(event, window, cx);
+                                    }
+                                })
+                            },
+                        ),
+                    ),
             )
             .child(
                 div()
@@ -431,7 +466,13 @@ impl RenderOnce for TrackRow {
                     .flex()
                     .items_center()
                     .gap_2p5()
-                    .children(artwork.map(|artwork| div().flex_none().child(artwork)))
+                    .children(artwork.map(|artwork| {
+                        div()
+                            .id(("track-cover", index))
+                            .test_support()
+                            .flex_none()
+                            .child(artwork)
+                    }))
                     .child(
                         // Cross-axis stretch (the default) hands each line a
                         // definite width, which text layout needs to ellipsize
@@ -534,7 +575,7 @@ impl RenderOnce for TrackRow {
                     handler(event, window, cx);
                 })
             })
-            .when_some(self.on_play.filter(|_| !self.current), |row, handler| {
+            .when_some(on_play.filter(|_| !self.current), |row, handler| {
                 row.on_click(move |event, window, cx| {
                     if event.is_keyboard() || event.click_count() == 2 {
                         handler(event, window, cx);
@@ -592,7 +633,7 @@ impl PlaylistRow {
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_open = Some(Box::new(handler));
+        self.on_open = Some(Rc::new(handler));
         self
     }
 }
@@ -638,7 +679,9 @@ impl RenderOnce for PlaylistRow {
                             .child(detail),
                     ),
             )
-            .when_some(self.on_open, |row, handler| row.on_click(handler))
+            .when_some(self.on_open, |row, handler| {
+                row.on_click(move |event, window, cx| handler(event, window, cx))
+            })
     }
 }
 

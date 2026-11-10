@@ -915,7 +915,7 @@ fn shared_rows_open_each_artist_and_album_from_every_library_collection() {
 }
 
 #[test]
-fn row_artwork_opens_album_and_plain_legacy_credits_stay_plain() {
+fn row_artwork_is_plain_and_legacy_credits_stay_plain() {
     let mut fixture = Fixture::at_width(900.);
     fixture.update(|window, _| {
         assert!(window.try_find(("track-artist", 0usize)).is_none());
@@ -934,11 +934,10 @@ fn row_artwork_opens_album_and_plain_legacy_credits_stay_plain() {
             );
         })
     });
-    fixture.update(|window, cx| {
+    fixture.update(|window, _| {
         assert!(window.try_find(("track-album", 0usize)).is_none());
-        window.click(("track-artwork", 0usize), cx);
+        assert!(window.try_find(("track-artwork", 0usize)).is_none());
     });
-    assert_eq!(fixture.requested_album(), "album-grease");
     fixture.no_commands();
 }
 
@@ -3093,6 +3092,114 @@ fn signing_out_discards_a_pending_spotify_like_reply() {
                 .liked_tracks()
                 .is_empty()
         )
+    });
+    fixture.no_commands();
+}
+
+#[test]
+fn collapsed_rail_tooltips_center_on_each_trigger_instead_of_pointer() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace
+            .upgrade()
+            .unwrap()
+            .read(cx)
+            .sidebar
+            .clone()
+            .update(cx, |sidebar, cx| sidebar.set_collapsed(true, cx));
+    });
+    fixture.cx.advance_clock(Duration::from_secs(1));
+    fixture.update(|_, _| {});
+    for id in [
+        "nav-library",
+        "nav-favorites",
+        "nav-recent",
+        "nav-playlist",
+        "nav-library",
+    ] {
+        fixture.update(|window, cx| window.hover(id, cx));
+        fixture.cx.advance_clock(Duration::from_millis(1));
+        fixture.update(|_, _| {});
+        fixture.update(|window, _| {
+            let trigger = window.find(id).bounds();
+            let tooltip = window.find("sidebar-tooltip").bounds();
+            assert!(
+                (trigger.center().y - tooltip.center().y).abs() <= px(1.),
+                "{id}: {trigger:?} vs {tooltip:?}"
+            );
+            assert!(tooltip.left() > trigger.right());
+            assert_eq!(tooltip.size.height, px(32.));
+        });
+    }
+    fixture.no_commands();
+}
+
+#[test]
+fn track_index_play_is_single_click_and_cover_is_passive() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| window.click(("track-cover", 1usize), cx));
+    fixture.no_commands();
+    fixture.update(|window, cx| {
+        let row = window.find(("spotify-track", 1usize)).bounds();
+        let play = window.find(("track-index", 1usize)).bounds();
+        assert!((play.center().y - row.center().y).abs() <= px(1.));
+        window.hover(("track-index", 1usize), cx);
+        window.click(("track-play", 1usize), cx);
+    });
+    assert!(matches!(
+        fixture.backend.commands.try_recv().unwrap(),
+        BackendCommand::PlayContext { index: 1, .. }
+    ));
+    fixture.no_commands();
+}
+
+#[test]
+fn initial_playlist_failure_replaces_skeletons_and_can_retry_without_scrolling() {
+    let mut fixture = Fixture::new(false);
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.load_playlist(paged_playlist(), cx);
+            workspace.navigate(Route::Playlist, cx);
+        })
+    });
+    let BackendCommand::LoadPlaylist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    respond
+        .send(Err(anyhow::anyhow!("Spotify denied playlist access")))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.cx.advance_clock(Duration::from_secs(2));
+    fixture.update(|window, cx| {
+        assert!(window.try_find(("spotify-track", 0usize)).is_none());
+        window.click("playlist-retry-page", cx);
+    });
+    let BackendCommand::LoadPlaylist {
+        offset, respond, ..
+    } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(offset, 0);
+    fixture.no_commands();
+    respond
+        .send(Ok(model::PlaylistTrackPage {
+            tracks: (0..15).map(track).collect(),
+            source_offsets: vec![],
+            total: 1000,
+            next_offset: Some(15),
+        }))
+        .unwrap();
+    fixture.update(|window, _| {
+        // Response processing is settled by the fixture after this closure.
+        let _ = window;
+    });
+    fixture.update(|window, _| {
+        assert!(window.try_find("playlist-retry-page").is_none());
+        assert!(window.try_find(("spotify-track", 0usize)).is_some());
     });
     fixture.no_commands();
 }

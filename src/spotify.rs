@@ -257,6 +257,22 @@ fn top_tracks_access_denied(error: &rspotify::ClientError) -> bool {
             if matches!(response.status().as_u16(), 403 | 404)))
 }
 
+fn playlist_request_error(error: rspotify::ClientError) -> anyhow::Error {
+    let status = match &error {
+        rspotify::ClientError::Http(error) => match error.as_ref() {
+            rspotify::http::HttpError::StatusCode(response) => Some(response.status().as_u16()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let error = anyhow::Error::new(error);
+    match status {
+        Some(403) => error.context("Spotify denied access to this playlist. Development Mode apps can read tracks only in playlists you own or collaborate on. Save a copy to your library in Spotify, then open that copy here"),
+        Some(404) => error.context("Spotify could not find this playlist or it is no longer accessible to your account"),
+        _ => error.context("Could not load Spotify playlist tracks"),
+    }
+}
+
 fn convert_saved_track(saved: SavedTrack) -> Result<Option<Track>> {
     if saved.track.is_local || saved.track.id.is_none() {
         return Ok(None);
@@ -580,7 +596,8 @@ impl Spotify {
             let page = self
                 .client
                 .playlist_items_manual(playlist_id, None, None, Some(15), Some(offset))
-                .await?;
+                .await
+                .map_err(playlist_request_error)?;
             let next_offset = page
                 .next
                 .as_ref()
@@ -1250,6 +1267,24 @@ mod tests {
         anyhow::Error::from(rspotify::ClientError::Http(Box::new(
             rspotify::http::HttpError::StatusCode(response),
         )))
+    }
+
+    #[test]
+    fn playlist_access_explanation_preserves_status_and_throttling() {
+        for status in [401, 403, 404, 429, 503] {
+            let original = status_error(status, Some("7"));
+            let expected = classify_error(&original);
+            let error = super::playlist_request_error(
+                original.downcast::<rspotify::ClientError>().unwrap(),
+            );
+            assert_eq!(classify_error(&error), expected);
+            if status == 403 {
+                assert!(error.to_string().contains("own or collaborate"));
+            }
+            if status == 404 {
+                assert!(error.to_string().contains("no longer accessible"));
+            }
+        }
     }
 
     #[test]
