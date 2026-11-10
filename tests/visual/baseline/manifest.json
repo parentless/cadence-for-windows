@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.12",
+    "cadence": "0.8.13",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "e854f40785da74e2859a483696cd0a7826d5f1fc",
-    "lockfile_sha256": "2829e0ccf9053e1845693c60dc575ba6ca26ee08325e8d4e06a7dca22a27b10b"
+    "revision": "31293307dbec2a8f11d995a5fc9aa7ff9be137b0",
+    "lockfile_sha256": "844fe69f45c2a8a0e40d7fb6dc4d39b3d03be5e3ff7e0fb06e945bcb1d04cdae"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42722527473",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42726707676",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,19 +57,19 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.12",
+      "cadence": "0.8.13",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "e854f40785da74e2859a483696cd0a7826d5f1fc",
-      "lockfile_sha256": "2829e0ccf9053e1845693c60dc575ba6ca26ee08325e8d4e06a7dca22a27b10b"
+      "revision": "31293307dbec2a8f11d995a5fc9aa7ff9be137b0",
+      "lockfile_sha256": "844fe69f45c2a8a0e40d7fb6dc4d39b3d03be5e3ff7e0fb06e945bcb1d04cdae"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42722527473"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42726707676"
   },
   "reviewed_changes": [
-    "Cached autocomplete uses at most six references to loaded favorites, history and liked songs, with a cancellable 120 ms background match and no network request or duplicate index",
-    "New references cover the glass cached-song dropdown with keyboard selection and the static playback control during pending playback, at both widths and appearances",
-    "Album track rows omit cover elements and preserve artist links, fixed row stride, playback and context actions; the large cover has static GPU box shadows",
-    "Artist backdrop now remains visible until the final 28 percent of the header before fading to the exact page fill; seam pixel assertions remain unchanged",
-    "All 152 references repeat exactly on macOS 15; previous scrolling, pinning, gutter and linked-credit interactions remain covered"
+    "Collapsed rail tooltips are vertically centered on live trigger bounds, wrap long titles within a fixed maximum width and use 14 point semibold text, with no added animation or idle work",
+    "Track indices and header markers are centered; a fixed index hover area reveals a play button without row movement, extra Tab stops or timers; current-track pause behavior remains",
+    "Track artwork is passive while text artist and album navigation remain; the blue dot is removed from source and shipped application icons",
+    "New references cover index hover and playlist access-denied recovery in both themes and widths; failed initial pages show an actionable error and Retry instead of skeleton rows",
+    "All 160 references repeat exactly on macOS 15; existing scrolling, fade seam, typography, pins, scrollbar gutter, cached-search and docking cases remain covered"
   ]
 }
