@@ -793,8 +793,8 @@ fn menu_padding_above(item: &ElementSnapshot) -> Point<gpui_kit::Pixels> {
 fn pressing_inside_the_track_menu_keeps_it_open_without_playing_the_row_beneath() {
     let mut fixture = Fixture::new(false);
     fixture.right_click_track(1);
-    let menu_padding =
-        fixture.update(|window, _| menu_padding_above(&window.find(("track-menu-play", 1usize))));
+    let menu_padding = fixture
+        .update(|window, _| menu_padding_above(&window.find(("track-menu-heading", 1usize))));
     let row_beneath = fixture.update(|window, _| window.find(("spotify-track", 1usize)).bounds());
     assert!(row_beneath.contains(&menu_padding));
 
@@ -3564,4 +3564,57 @@ fn duplicate_only_discography_pages_require_manual_continuation_instead_of_auto_
     fixture.update(|_, _| {});
     scroll_discography(&mut fixture);
     fixture.no_commands();
+}
+
+#[test]
+fn playback_clock_updates_reuse_metadata_and_shared_track_allocation() {
+    let mut fixture = Fixture::new(false);
+    let current = track(0);
+    let uri = current.spotify_uri.clone().unwrap();
+    fixture.play(current);
+    let workspace = fixture.workspace.clone().unwrap();
+    let count = |fixture: &mut Fixture| {
+        fixture.update(|_, cx| {
+            workspace
+                .upgrade()
+                .unwrap()
+                .read(cx)
+                .player_bar
+                .read(cx)
+                .metadata_render_count(cx)
+        })
+    };
+    let before = count(&mut fixture);
+    let allocation = fixture.update(|_, cx| {
+        services::AppServices::player(cx)
+            .read(cx)
+            .shared_now_playing()
+            .unwrap()
+    });
+    for position in 1..=100 {
+        fixture.player_event(BackendEvent::PositionChanged {
+            spotify_uri: uri.clone(),
+            position_ms: position * 10,
+        });
+    }
+    let after = count(&mut fixture);
+    assert_eq!(
+        after, before,
+        "progress updates rebuilt the track metadata subtree"
+    );
+    fixture.update(|_, cx| {
+        assert!(Arc::ptr_eq(
+            &allocation,
+            &services::AppServices::player(cx)
+                .read(cx)
+                .shared_now_playing()
+                .unwrap()
+        ))
+    });
+    fixture.play(track(2));
+    assert_eq!(
+        count(&mut fixture),
+        before + 1,
+        "new tracks must refresh cached labels"
+    );
 }

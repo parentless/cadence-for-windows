@@ -651,6 +651,9 @@ impl ArtistPage {
         self.reference = Some(artist);
         self.error = None;
         if !same_artist {
+            let view = cx.entity_id();
+            self.image_cache
+                .update(cx, |cache, _| cache.forget_view(view));
             self.artist = None;
             self.tracks = Arc::default();
             self.albums = Vec::new();
@@ -664,7 +667,16 @@ impl ArtistPage {
             self.loaded_at = None;
             self.content_layout = None;
             self.pending_album_anchor = None;
-            self.header_motion.update(cx, |header, cx| header.reset(cx));
+            self.header_motion.update(cx, |header, cx| {
+                header.name = self
+                    .reference
+                    .as_ref()
+                    .expect("artist reference was set above")
+                    .name
+                    .clone();
+                header.artwork = None;
+                header.reset(cx);
+            });
         } else if retrying_failure {
             self.loaded = false;
         }
@@ -682,6 +694,11 @@ impl ArtistPage {
                     page.request = None;
                     match result {
                         Ok((artist, tracks, albums)) => {
+                            page.header_motion.update(cx, |header, cx| {
+                                header.name = artist.name.clone();
+                                header.artwork = artist.artwork_url.clone();
+                                cx.notify();
+                            });
                             page.artist = Some(artist);
                             page.tracks = tracks.into();
                             page.albums = Vec::new();
@@ -709,6 +726,9 @@ impl ArtistPage {
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        let view = cx.entity_id();
+        self.image_cache
+            .update(cx, |cache, _| cache.forget_view(view));
         self.request = None;
         self.track_list.update(cx, |list, cx| list.clear(cx));
         self.content_layout = None;
@@ -1796,20 +1816,8 @@ impl ArtistPage {
 impl Render for ArtistPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = appearance::Appearance::palette(cx);
-        let name = self
-            .artist
-            .as_ref()
-            .map(|a| a.name.clone())
-            .or_else(|| self.reference.as_ref().map(|a| a.name.clone()))
-            .unwrap_or_else(|| "Artist".into());
-        let artwork = self.artist.as_ref().and_then(|a| a.artwork_url.clone());
-        self.header_motion.update(cx, |header, cx| {
-            if header.name != name || header.artwork != artwork {
-                header.name = name;
-                header.artwork = artwork;
-                cx.notify();
-            }
-        });
+        // Identity is synchronized on navigation/replies, not copied during
+        // every page repaint. The overlay owns its finite motion independently.
         let columns = self.content_columns;
         let layout = (
             self.tracks.len(),

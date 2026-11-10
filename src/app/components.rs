@@ -315,13 +315,28 @@ pub(super) fn disabled_text_menu_item(
 }
 
 fn text_menu_row(row: Stateful<Div>, label: &'static str, color: u32) -> Stateful<Div> {
+    let glyph = match label {
+        "Play now" => CadenceIcon::Play,
+        "Play next" => CadenceIcon::SkipForward,
+        "Add to queue" => CadenceIcon::Queue,
+        "Go to artist" => CadenceIcon::Person,
+        "Go to album" => CadenceIcon::MusicNote,
+        "Open track in Spotify" => CadenceIcon::ArrowUpRight,
+        "Add to Liked Songs" | "Remove from Liked Songs" | "Updating Spotify library…" => {
+            CadenceIcon::Heart
+        }
+        "Add to favorites" | "Remove from favorites" => CadenceIcon::Star,
+        _ => CadenceIcon::MusicNote,
+    };
     row.w_full()
         .h_9()
         .px_3()
         .justify_start()
+        .gap_2p5()
         .rounded_lg()
         .text_size(tokens::BODY_TEXT)
         .text_color(rgb(color))
+        .child(icon(glyph, tokens::MENU_ICON, color))
         .child(label)
 }
 
@@ -461,28 +476,45 @@ pub(super) fn rectangular_artwork(
         .rounded(artwork_size.radius)
         .overflow_hidden();
     if let Some(url) = url {
+        let cache = image_cache.clone();
+        let resource = gpui_kit::Resource::Uri(url.to_owned().into());
         frame
+            .bg(rgb(palette.selection))
             .child(
-                img({
-                    let cache = image_cache.clone();
-                    let resource = gpui_kit::Resource::Uri(url.to_owned().into());
-                    move |window: &mut Window, cx: &mut App| {
-                        let physical = f32::from(
-                            Rems(width.0.min(artwork_size.size.0)).to_pixels(window.rem_size()),
-                        ) * window.scale_factor();
+                gpui_kit::canvas(
+                    move |bounds, window, cx| {
+                        if !bounds.intersects(&window.content_mask().bounds) {
+                            return None;
+                        }
+                        let physical = f32::from(bounds.size.width.min(bounds.size.height))
+                            * window.scale_factor();
                         cache.update(cx, |cache, cx| {
-                            cache.load_sized(&resource, physical.ceil() as u32, window, cx)
+                            cache
+                                .load_visible_sized(&resource, physical.ceil() as u32, window, cx)
+                                .and_then(Result::ok)
                         })
-                    }
-                })
-                // Absolute dimensions keep intrinsic portrait/wide image
-                // ratios from influencing the artwork frame's layout.
+                    },
+                    move |bounds, image: Option<Arc<gpui_kit::RenderImage>>, window, _| {
+                        if let Some(image) = image.filter(|image| image.frame_count() > 0) {
+                            let fitted =
+                                gpui_kit::ObjectFit::Cover.get_bounds(bounds, image.size(0));
+                            let radius = artwork_size.radius.to_pixels(window.rem_size());
+                            if let Err(error) = window.paint_image(
+                                bounds,
+                                fitted,
+                                gpui_kit::Corners::all(radius),
+                                image,
+                                0,
+                                false,
+                            ) {
+                                log::warn!("could not paint artwork: {error}");
+                            }
+                        }
+                    },
+                )
                 .absolute()
                 .inset_0()
-                .size_full()
-                .flex_none()
-                .rounded(artwork_size.radius)
-                .object_fit(gpui_kit::ObjectFit::Cover),
+                .size_full(),
             )
             .into_any_element()
     } else {
@@ -570,7 +602,7 @@ pub(super) fn page(id: impl Into<ElementId>) -> Stateful<Div> {
     div().id(id).size_full().min_h_0().flex().flex_col().p_8()
 }
 
-/// The account menu stays opaque; glass belongs to search and track menus.
+/// Opaque native menus; the search field retains its separate glass treatment.
 pub(super) fn solid_menu_surface(palette: CadencePalette) -> Div {
     div()
         .occlude()
@@ -799,5 +831,80 @@ mod hover_tests {
                 .from,
             0.
         );
+    }
+}
+
+/// Local pointer feedback keeps the control's layout and hit target fixed.
+/// Only release interpolates; keyboard activation never enters pointer state.
+#[derive(gpui_kit::IntoElement)]
+pub(super) struct PressFeedback {
+    id: ElementId,
+    control: AnyElement,
+}
+#[derive(Default)]
+struct PointerPress {
+    down: bool,
+}
+
+pub(super) fn press_feedback(id: impl Into<ElementId>, control: impl IntoElement) -> PressFeedback {
+    PressFeedback {
+        id: id.into(),
+        control: control.into_any_element(),
+    }
+}
+
+impl gpui_kit::RenderOnce for PressFeedback {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let id = self.id.clone();
+        window.with_id(self.id, |window| {
+            let state = window.use_keyed_state("pointer-press", cx, |_, _| PointerPress::default());
+            if !window.is_window_active() && state.read(cx).down {
+                state.update(cx, |state, _| state.down = false);
+            }
+            let down = state.read(cx).down;
+            let opacity = gpui_kit::base::transition(
+                "press-release",
+                if down { 0.90 } else { 1. },
+                gpui_kit::base::Transition::new(if down {
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(100)
+                })
+                .ease(gpui_kit::ease_out_quint()),
+                window,
+                cx,
+            );
+            let view = window.current_view();
+            let pressed = state.clone();
+            let released = state.clone();
+            let departed = state.clone();
+            div()
+                .id(id)
+                .flex_none()
+                .flex()
+                .items_center()
+                .opacity(opacity)
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    pressed.update(cx, |state, _| state.down = true);
+                    cx.notify(view);
+                })
+                .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    released.update(cx, |state, _| state.down = false);
+                    cx.notify(view);
+                })
+                .on_hover(move |hovered, _, cx| {
+                    if !*hovered && departed.read(cx).down {
+                        departed.update(cx, |state, _| state.down = false);
+                        cx.notify(view);
+                    }
+                })
+                .on_mouse_up_out(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    if state.read(cx).down {
+                        state.update(cx, |state, _| state.down = false);
+                        cx.notify(view);
+                    }
+                })
+                .child(self.control)
+        })
     }
 }

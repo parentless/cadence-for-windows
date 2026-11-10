@@ -233,10 +233,6 @@ fn sidebar_transition_duration(
     Duration::from_millis((180. * remaining_fraction).round().max(60.) as u64)
 }
 
-fn interpolate_sidebar_width(from: Rems, target: Rems, delta: f32) -> Rems {
-    from + (target - from) * delta
-}
-
 /// Leading padding that puts a row's leading content on the collapsed rail
 /// axis at progress 0 and back on its expanded padding at progress 1.
 fn sidebar_row_pad(expanded_pad: Rems, content_width: Rems, progress: f32) -> Rems {

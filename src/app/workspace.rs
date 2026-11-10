@@ -195,7 +195,7 @@ impl Workspace {
                 ToolbarEvent::MenuOpened => this.close_queue(cx),
             },
         ));
-        let player_bar = cx.new(|cx| player_bar::PlayerBar::new(cx));
+        let player_bar = cx.new(player_bar::PlayerBar::new);
         subscriptions.push(cx.subscribe(&player_bar, Workspace::handle_page_event));
         subscriptions.push(cx.subscribe(
             &player_bar,

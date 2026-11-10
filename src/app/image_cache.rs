@@ -12,7 +12,9 @@ use std::{
     time::Duration,
 };
 
-const MAX_IMAGES: usize = 48;
+// Small rail thumbnails and a dense discography can exceed 48 simultaneously
+// visible URLs. Retain more keys while keeping the same combined byte budget.
+const MAX_IMAGES: usize = 128;
 const MAX_DECODED_BYTES: usize = 32 * 1024 * 1024;
 const FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5);
 const IMAGE_WORKERS: usize = 2;
@@ -27,6 +29,7 @@ type ImageLoadingTask = Shared<Task<Result<DecodedArtwork, ImageCacheError>>>;
 struct CacheEntry {
     target: u32,
     waiters: Vec<EntityId>,
+    visible_demands: Vec<(EntityId, u64)>,
     image: Option<Arc<RenderImage>>,
     source: Option<Arc<[u8]>>,
     bytes: usize,
@@ -88,6 +91,8 @@ pub(super) struct BoundedImageCache {
     evictions: u64,
     workers: Arc<tokio::sync::Semaphore>,
     owner: Option<WeakEntity<Self>>,
+    visibility_batches: HashMap<EntityId, u64>,
+    visibility_generation: u64,
 }
 impl BoundedImageCache {
     pub(super) fn usage(&self) -> (usize, usize, bool) {
@@ -100,6 +105,7 @@ impl BoundedImageCache {
             }
         }
         self.recency.clear();
+        self.visibility_batches.clear();
         self.decoded_bytes = 0;
         self.evictions = 0;
     }
@@ -114,6 +120,8 @@ impl BoundedImageCache {
             evictions: 0,
             workers: Arc::new(tokio::sync::Semaphore::new(IMAGE_WORKERS)),
             owner: Some(cx.weak_entity()),
+            visibility_batches: HashMap::new(),
+            visibility_generation: 0,
         });
         cx.observe_release(&cache, |cache, cx| {
             for item in cache.items.values() {
@@ -142,6 +150,7 @@ impl BoundedImageCache {
                 CacheEntry {
                     target: u32::MAX,
                     waiters: Vec::new(),
+                    visible_demands: Vec::new(),
                     image: Some(image),
                     source: None,
                     bytes,
@@ -154,6 +163,80 @@ impl BoundedImageCache {
             self.touch(&key);
         }
     }
+    /// Called only after artwork intersects its clipped viewport. One deferred
+    /// sweep per drawing view drops its obsolete requests after all visible
+    /// canvases have registered; it never requests another frame itself.
+    pub(super) fn load_visible_sized(
+        &mut self,
+        resource: &Resource,
+        side: u32,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        let view = window.current_view();
+        let epoch = if let Some(epoch) = self.visibility_batches.get(&view) {
+            *epoch
+        } else {
+            self.visibility_generation = self.visibility_generation.wrapping_add(1);
+            let epoch = self.visibility_generation;
+            self.visibility_batches.insert(view, epoch);
+            if let Some(owner) = self.owner.clone() {
+                cx.defer(move |cx| {
+                    let _ = owner.update(cx, |cache, _| cache.finish_visibility(view, epoch));
+                });
+            }
+            epoch
+        };
+        let result = self.load_sized(resource, side, window, cx);
+        if let Some(entry) = self.items.get_mut(resource)
+            && entry.request.is_some()
+        {
+            if let Some(demand) = entry.visible_demands.iter_mut().find(|(id, _)| *id == view) {
+                demand.1 = epoch;
+            } else {
+                entry.visible_demands.push((view, epoch));
+            }
+        }
+        result
+    }
+
+    pub(super) fn forget_view(&mut self, view: EntityId) {
+        self.visibility_generation = self.visibility_generation.wrapping_add(1);
+        let epoch = self.visibility_generation;
+        self.visibility_batches.insert(view, epoch);
+        self.finish_visibility(view, epoch);
+    }
+
+    fn finish_visibility(&mut self, view: EntityId, epoch: u64) {
+        if self.visibility_batches.get(&view) != Some(&epoch) {
+            return;
+        }
+        self.visibility_batches.remove(&view);
+        self.items.retain(|_, entry| {
+            if entry.request.is_some()
+                && entry
+                    .visible_demands
+                    .iter()
+                    .any(|&(id, last)| id == view && last != epoch)
+            {
+                entry.visible_demands.retain(|&(id, _)| id != view);
+                entry.waiters.retain(|id| *id != view);
+                if entry.waiters.is_empty() {
+                    // Drop both owners of the shared future. This cancels queued
+                    // semaphore work and the abort-on-drop HTTP guard alike.
+                    entry.request = None;
+                    entry._notification = None;
+                    entry.target = 0;
+                    if entry.image.is_none() {
+                        return false;
+                    }
+                }
+            }
+            true
+        });
+        self.recency.retain(|key| self.items.contains_key(key));
+    }
+
     pub(super) fn artist_backdrop(
         &mut self,
         url: &str,
@@ -352,6 +435,7 @@ impl BoundedImageCache {
             .or_insert_with(|| CacheEntry {
                 target,
                 waiters: Vec::new(),
+                visible_demands: Vec::new(),
                 image: None,
                 source: None,
                 bytes: 0,
@@ -364,6 +448,7 @@ impl BoundedImageCache {
         // cancels stale work; successful completion explicitly drops the old GPU image.
         entry.target = target;
         entry.waiters = vec![entity];
+        entry.visible_demands.clear();
         entry.request = Some(task);
         entry.error = None;
         entry.retry_ready = ready;
@@ -468,6 +553,7 @@ mod tests {
         cache: Entity<BoundedImageCache>,
         requests: Vec<(Resource, u32)>,
         results: Vec<Option<Result<Arc<RenderImage>, ImageCacheError>>>,
+        visible: bool,
     }
     impl gpui_kit::Render for ArtworkProbe {
         fn render(
@@ -479,8 +565,13 @@ mod tests {
                 .requests
                 .iter()
                 .map(|(key, side)| {
-                    self.cache
-                        .update(cx, |cache, cx| cache.load_sized(key, *side, window, cx))
+                    self.cache.update(cx, |cache, cx| {
+                        if self.visible {
+                            cache.load_visible_sized(key, *side, window, cx)
+                        } else {
+                            cache.load_sized(key, *side, window, cx)
+                        }
+                    })
                 })
                 .collect();
             gpui_kit::div()
@@ -512,6 +603,7 @@ mod tests {
                             cache: cache.clone(),
                             requests: Vec::new(),
                             results: Vec::new(),
+                            visible: false,
                         });
                         probe = Some(entity.clone());
                         entity
@@ -533,6 +625,11 @@ mod tests {
                 })
             });
             crate::app::test_support::settle(&mut self.cx, self.window.into());
+        }
+        fn load_visible(&mut self, requests: Vec<(Resource, u32)>) {
+            self.cx
+                .update(|cx| self.probe.update(cx, |probe, _| probe.visible = true));
+            self.load(requests);
         }
         fn image(&mut self) -> Arc<RenderImage> {
             self.cx
@@ -653,6 +750,243 @@ mod tests {
     }
 
     #[test]
+    fn dense_visible_thumbnails_do_not_thrash_the_entry_ceiling_or_refetch() {
+        use std::sync::atomic::AtomicUsize;
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            64,
+            image::Rgb([20, 80, 160]),
+        ))
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+        let bytes = bytes.into_inner();
+        let client = gpui_kit::http_client::FakeHttpClient::create(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+            let bytes = bytes.clone();
+            async move {
+                Ok(gpui_kit::http_client::Response::builder()
+                    .status(200)
+                    .body(bytes.into())
+                    .unwrap())
+            }
+        });
+        let mut fixture = ArtworkFixture::new(client);
+        let urls: Vec<_> = (0..80)
+            .map(|i| {
+                (
+                    Resource::Uri(format!("https://example.test/{i}.png").into()),
+                    64,
+                )
+            })
+            .collect();
+        fixture.load_visible(urls.clone());
+        fixture.load_visible(urls);
+        assert_eq!(
+            requests.load(Ordering::Relaxed),
+            80,
+            "a visible cover was evicted and fetched again"
+        );
+        fixture.cx.update(|cx| {
+            let cache = fixture.cache.read(cx);
+            assert_eq!(cache.items.len(), 80);
+            assert_eq!(cache.evictions, 0);
+            assert!(cache.decoded_bytes <= MAX_DECODED_BYTES);
+            assert!(cache.visibility_batches.is_empty());
+        });
+    }
+
+    #[test]
+    fn leaving_the_viewport_cancels_old_queued_artwork_before_new_work() {
+        use std::sync::Mutex;
+        struct Active {
+            url: String,
+            active: Arc<Mutex<std::collections::HashSet<String>>>,
+        }
+        impl Drop for Active {
+            fn drop(&mut self) {
+                self.active.lock().unwrap().remove(&self.url);
+            }
+        }
+        let active = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let observed = active.clone();
+        let client = gpui_kit::http_client::FakeHttpClient::create(move |request| {
+            let url = request.uri().to_string();
+            let active = observed.clone();
+            async move {
+                active.lock().unwrap().insert(url.clone());
+                let _guard = Active { url, active };
+                futures::future::pending::<
+                    anyhow::Result<
+                        gpui_kit::http_client::Response<gpui_kit::http_client::AsyncBody>,
+                    >,
+                >()
+                .await
+            }
+        });
+        let mut fixture = ArtworkFixture::new(client);
+        fixture.load_visible(
+            (0..12)
+                .map(|i| {
+                    (
+                        Resource::Uri(format!("https://example.test/old-{i}.png").into()),
+                        64,
+                    )
+                })
+                .collect(),
+        );
+        assert_eq!(active.lock().unwrap().len(), IMAGE_WORKERS);
+        fixture.load_visible(
+            (0..4)
+                .map(|i| {
+                    (
+                        Resource::Uri(format!("https://example.test/new-{i}.png").into()),
+                        64,
+                    )
+                })
+                .collect(),
+        );
+        {
+            let active = active.lock().unwrap();
+            assert_eq!(active.len(), IMAGE_WORKERS);
+            assert!(
+                active.iter().all(|url| url.contains("new-")),
+                "stale covers kept workers occupied: {active:?}"
+            );
+        }
+        fixture.cx.update(|cx| {
+            let cache = fixture.cache.read(cx);
+            assert_eq!(cache.items.len(), 4);
+            assert!(cache.visibility_batches.is_empty());
+        });
+        fixture.clear();
+        assert!(active.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn removing_one_views_demand_preserves_another_views_shared_request() {
+        let client = gpui_kit::http_client::FakeHttpClient::create(move |_| async {
+            futures::future::pending::<
+                anyhow::Result<gpui_kit::http_client::Response<gpui_kit::http_client::AsyncBody>>,
+            >()
+            .await
+        });
+        let mut fixture = ArtworkFixture::new(client);
+        let shared = Resource::Uri("https://example.test/shared.png".into());
+        fixture.load_visible(vec![(shared.clone(), 64)]);
+        let cache = fixture.cache.clone();
+        let mut other = None;
+        let other_window = fixture
+            .cx
+            .open_window(
+                gpui_kit::size(gpui_kit::px(100.), gpui_kit::px(100.)),
+                |_, cx| {
+                    let view = cx.new(|_| ArtworkProbe {
+                        cache,
+                        requests: vec![(shared.clone(), 64)],
+                        results: Vec::new(),
+                        visible: true,
+                    });
+                    other = Some(view.clone());
+                    view
+                },
+            )
+            .unwrap();
+        crate::app::test_support::settle(&mut fixture.cx, other_window.into());
+        fixture.load_visible(vec![(
+            Resource::Uri("https://example.test/new.png".into()),
+            64,
+        )]);
+        fixture.cx.update(|cx| {
+            let cache = fixture.cache.read(cx);
+            let entry = cache.items.get(&shared).expect("shared image was canceled");
+            assert!(entry.request.is_some());
+            assert_eq!(entry.waiters, [other.as_ref().unwrap().entity_id()]);
+        });
+        fixture.clear();
+        drop(other);
+    }
+
+    struct ClippedArtwork {
+        cache: Entity<BoundedImageCache>,
+        top: f32,
+    }
+    impl gpui_kit::Render for ClippedArtwork {
+        fn render(
+            &mut self,
+            _: &mut Window,
+            _: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{ParentElement as _, Styled as _};
+            gpui_kit::div()
+                .size_full()
+                .relative()
+                .overflow_hidden()
+                .child(
+                    gpui_kit::div()
+                        .absolute()
+                        .top(gpui_kit::px(self.top))
+                        .child(super::super::components::artwork(
+                            super::super::CadencePalette::DARK,
+                            &self.cache,
+                            Some("https://example.test/clipped.png"),
+                            super::super::tokens::ArtworkSize {
+                                size: gpui_kit::Rems(3.),
+                                radius: gpui_kit::Rems(0.5),
+                            },
+                            super::super::CadenceIcon::MusicNote,
+                        )),
+                )
+        }
+    }
+
+    #[test]
+    fn offscreen_artwork_does_not_start_network_work_during_measurement() {
+        use std::sync::atomic::AtomicUsize;
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let client = gpui_kit::http_client::FakeHttpClient::create(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+            async {
+                futures::future::pending::<
+                    anyhow::Result<
+                        gpui_kit::http_client::Response<gpui_kit::http_client::AsyncBody>,
+                    >,
+                >()
+                .await
+            }
+        });
+        let mut fixture = ArtworkFixture::new(client);
+        let cache = fixture.cache.clone();
+        let mut view = None;
+        let window = fixture
+            .cx
+            .open_window(
+                gpui_kit::size(gpui_kit::px(100.), gpui_kit::px(100.)),
+                |_, cx| {
+                    let entity = cx.new(|_| ClippedArtwork { cache, top: 1000. });
+                    view = Some(entity.clone());
+                    entity
+                },
+            )
+            .unwrap();
+        crate::app::test_support::settle(&mut fixture.cx, window.into());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        fixture.cx.update(|cx| {
+            view.as_ref().unwrap().update(cx, |view, cx| {
+                view.top = 0.;
+                cx.notify();
+            })
+        });
+        crate::app::test_support::settle(&mut fixture.cx, window.into());
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+        // Drop entity handles before the headless context audits them.
+        drop(view);
+    }
+
+    #[test]
     fn artist_blur_is_static_bounded_and_preserves_channel_order() {
         let pixels = image::RgbaImage::from_pixel(1200, 800, image::Rgba([20, 80, 160, 255]));
         let original = RenderImage::new([image::Frame::new(pixels)]);
@@ -716,6 +1050,8 @@ mod tests {
             evictions: 0,
             workers: Arc::new(tokio::sync::Semaphore::new(IMAGE_WORKERS)),
             owner: None,
+            visibility_batches: HashMap::new(),
+            visibility_generation: 0,
         };
 
         cache.touch(&first);

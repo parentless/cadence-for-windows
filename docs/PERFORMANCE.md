@@ -27,7 +27,7 @@ Older playlist chunks are evicted, but scroll position is retained: revisiting a
 distant range refetches that range directly. Playback continues independently
 using Spotify's raw item cursor.
 
-Artwork has a shared 48-entry / 32 MiB retained-image budget (decoded pixels
+Artwork has a shared 128-entry / 32 MiB retained-image budget (decoded pixels
 and retained compressed sources combined; one oversized entry is allowed). Detail pages use
 the same theme background as search, with no cover-colour sampling. Artist
 skeletons are static; there is no shimmer timer or new blur pass.
@@ -256,3 +256,43 @@ created. Tests cover raw cursor handling, partial dates, cross-page sorting,
 duplicate pages, retry, single-flight requests, route cancellation, scroll
 anchors and release of retained allocations. This is structural/test evidence,
 not a claim of measured Windows CPU, GPU or long-running heap usage.
+
+# Visible artwork and local feedback (0.8.18)
+
+Cover loading starts in clipped prepaint, never from image measurement. Virtual
+overscan rows do not start downloads or decode work. Each drawing view registers
+its current pending cover demand in one deferred batch; requests no longer
+needed by that view are dropped, including semaphore waiters and abort-on-drop
+HTTP work. Other drawing views keep their shared requests. Switching artists
+also releases the old grid's pending demand. These batches do not request frames
+or poll while idle, and their bookkeeping is removed after the draw.
+
+The entry ceiling is 128 instead of 48 so a dense visible discography can coexist
+with rail thumbnails. Combined decoded pixels and compressed sources retain the
+same 32 MiB budget (with the existing single-oversize exception), two workers,
+download limits and decode limits. Actual retained bytes can increase within
+that existing ceiling when more small covers fit. There is no new disk cache or
+catalog-wide image prefetch. Pending/failed covers have a static neutral fill.
+Tests exercise 80 thumbnails without refetch, cancellation before newer work,
+o network work from offscreen measurement, and the unchanged byte budget.
+
+The player holds its current track in one Arc; a cached metadata child updates
+only when that allocation changes. A 100-position-update test verifies no extra
+metadata renders and the same track allocation, followed by one refresh on a
+track change. Album/artist links and theme/size invalidation remain covered.
+Sidebar toggles assign the final content width once; local rail label/fill
+feedback remains finite. Artist identity metadata is synchronized on navigation
+and replies rather than copied during every page render. Existing docking text
+and its bounded motion are preserved; GPUI already caches shaped text, so no
+second font cache or rasterized text texture is added.
+
+Track menus use an opaque surface, a loaded track summary, grouped actions and
+existing bundled glyphs. All previous actions remain. Their 150 ms ease-out
+opacity entrance does not animate geometry or delay clicks; dismissal is direct.
+Transport pointer feedback is immediate with a 100 ms opacity return. The
+native GPUI version has no general paint-scale transform for child trees, so
+these controls retain their size/hit area and use opacity rather than adding
+layout scaling or a renderer fork. Keyboard activation and reduced motion add
+no interpolation; every frame request is bounded to an active transition.
+Play/pause glyph assets remain unchanged. These tests and code bounds do not
+constitute a Windows CPU/GPU profile or proof of zero allocations/leaks globally.

@@ -46,7 +46,8 @@ fn mascot_transition_duration(playing: bool, remaining: f32) -> Duration {
 /// has no dispatch node, so it cannot mark this view dirty on its own.
 pub(super) struct PlayerBar {
     player: Entity<player::Player>,
-    image_cache: Entity<image_cache::BoundedImageCache>,
+    metadata: Entity<PlayerMetadata>,
+    _metadata_events: Subscription,
     queue_open: bool,
     mascot_playing: bool,
     mascot_transition_generation: u64,
@@ -87,12 +88,19 @@ fn artist_credits(track: Option<&model::Track>) -> Vec<model::ArtistRef> {
 }
 
 impl PlayerBar {
-    pub(super) fn new(cx: &mut App) -> Self {
+    pub(super) fn new(cx: &mut Context<Self>) -> Self {
         let player = services::AppServices::player(cx);
         let playing = player.read(cx).playing();
+        let metadata = cx.new(|cx| PlayerMetadata {
+            track: None,
+            #[cfg(test)]
+            renders: 0,
+            image_cache: services::AppServices::image_cache(cx),
+        });
         Self {
             player,
-            image_cache: services::AppServices::image_cache(cx),
+            _metadata_events: page::forward(&metadata, cx),
+            metadata,
             queue_open: false,
             mascot_playing: playing,
             mascot_transition_generation: 0,
@@ -101,6 +109,11 @@ impl PlayerBar {
             mascot_reveal: Rc::new(Cell::new(f32::from(playing))),
             scrubber: scrubber::Scrubber::new(cx),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn metadata_render_count(&self, cx: &App) -> usize {
+        self.metadata.read(cx).renders
     }
 
     pub(super) fn queue_open(&self) -> bool {
@@ -144,6 +157,312 @@ impl PlayerBar {
             }))
     }
 
+    fn bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = appearance::Appearance::palette(cx);
+        let viewport_width = window.viewport_size().width;
+        let rem_size = window.rem_size();
+        let compact = uses_compact_player_layout(viewport_width, rem_size);
+        let progress_slider_width = if compact {
+            compact_progress_slider_width(viewport_width, rem_size)
+        } else {
+            PROGRESS_SLIDER_WIDTH
+        };
+        let player = self.player.read(cx);
+        let now_playing = player.shared_now_playing();
+        let playing = player.playing();
+        let shuffle = player.shuffle();
+        let position_ms = player.position_ms(cx.background_executor().now());
+        let volume = player.volume();
+        self.metadata.update(cx, |metadata, cx| {
+            let same = match (&metadata.track, &now_playing) {
+                (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                metadata.track = now_playing.clone();
+                cx.notify();
+            }
+        });
+        let volume_thumb_left = (VOLUME_SLIDER_WIDTH - VOLUME_THUMB_SIZE) * volume;
+        let volume_thumb_top = (VOLUME_TRACK_HEIGHT - VOLUME_THUMB_SIZE) / 2.;
+        let live_track = now_playing.is_some();
+        let mascot = services::AppServices::preferences(cx).mascot;
+        let reduce_motion = cx.reduce_motion();
+        let show_mascot = live_track && mascot != MascotPreference::None;
+        if !show_mascot {
+            let target = f32::from(playing);
+            self.mascot_playing = playing;
+            self.mascot_transition_from = target;
+            self.mascot_transition_duration = mascot_transition_duration(playing, 0.);
+            self.mascot_reveal.set(target);
+        } else if self.mascot_playing != playing {
+            self.mascot_transition_from = self.mascot_reveal.get();
+            let target = f32::from(playing);
+            let remaining = (target - self.mascot_transition_from).abs();
+            self.mascot_transition_duration = mascot_transition_duration(playing, remaining);
+            self.mascot_playing = playing;
+            self.mascot_transition_generation = self.mascot_transition_generation.wrapping_add(1);
+        }
+        let render_mascot = show_mascot && (playing || self.mascot_reveal.get() > 0.);
+        let duration = SharedString::from(now_playing.as_deref().map_or_else(
+            || "0:00".to_owned(),
+            |track| format_duration(track.duration_ms),
+        ));
+        let volume_icon = if volume == 0. {
+            CadenceIcon::SpeakerMuted
+        } else {
+            CadenceIcon::Speaker
+        };
+        let duration_ms = now_playing.as_deref().map_or(0, |track| track.duration_ms);
+        div()
+            .relative()
+            .h_24()
+            .w_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_6()
+            .px_6()
+            .bg(rgb(palette.surface))
+            .border_t_1()
+            .border_color(rgb(palette.border))
+            .when(render_mascot, |bar| {
+                let from = self.mascot_transition_from;
+                let target = f32::from(playing);
+                let reveal = self.mascot_reveal.clone();
+                let generation = self.mascot_transition_generation as usize;
+                let animation = Animation::new(self.mascot_transition_duration)
+                    .with_easing(ease_out_quint())
+                    .with_max_fps(60.);
+                bar.child(
+                    player_mascot::render(position_ms, mascot, reduce_motion).with_animation(
+                        ("mascot-reveal", generation),
+                        animation,
+                        move |mascot, delta| {
+                            let progress = from + (target - from) * delta;
+                            reveal.set(progress);
+                            let bottom = player_mascot::HIDDEN_BOTTOM
+                                + (player_mascot::VISIBLE_BOTTOM - player_mascot::HIDDEN_BOTTOM)
+                                    * progress;
+                            mascot.bottom(px(bottom))
+                        },
+                    ),
+                )
+            })
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(rgb(palette.surface))
+                    .border_t_1()
+                    .border_color(rgb(palette.border)),
+            )
+            .child(
+                div()
+                    .w(if compact {
+                        COMPACT_PLAYER_LEFT_WIDTH
+                    } else {
+                        PLAYER_LEFT_WIDTH
+                    })
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(self.metadata.clone().cached(gpui_kit::StyleRefinement {
+                        size: gpui_kit::SizeRefinement {
+                            width: Some(gpui_kit::relative(1.).into()),
+                            height: Some(tokens::PLAYER_ARTWORK.size.into()),
+                        },
+                        ..Default::default()
+                    })),
+            )
+            .child(
+                div()
+                    .w(if compact {
+                        progress_slider_width + PROGRESS_TIME_WIDTH * 2. + PROGRESS_GAP * 2.
+                    } else {
+                        PLAYER_CENTER_WIDTH
+                    })
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(components::press_feedback(
+                                "shuffle-feedback",
+                                components::icon_button(palette, "shuffle", CadenceIcon::Shuffle)
+                                    .when(shuffle, |button| button.bg(rgb(palette.selection)))
+                                    .tooltip(move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(if shuffle {
+                                            "Shuffle on"
+                                        } else {
+                                            "Shuffle off"
+                                        })
+                                        .build(window, cx)
+                                    })
+                                    .test_support()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.player
+                                            .update(cx, |player, cx| player.toggle_shuffle(cx));
+                                    })),
+                            ))
+                            .child(components::press_feedback(
+                                "previous-feedback",
+                                components::icon_button(palette, "previous", CadenceIcon::SkipBack)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.player.update(cx, |player, cx| player.previous(cx));
+                                    })),
+                            ))
+                            .child(components::press_feedback(
+                                "play-toggle-feedback",
+                                components::filled_button(palette, "play-toggle")
+                                    .aria_label(if playing { "Pause" } else { "Play" })
+                                    .hover(|style| style.opacity(0.9))
+                                    .size_10()
+                                    .rounded_full()
+                                    .bg(rgb(palette.text_primary))
+                                    .child(components::icon(
+                                        if playing {
+                                            CadenceIcon::Pause
+                                        } else {
+                                            CadenceIcon::Play
+                                        },
+                                        tokens::PLAYBACK_ICON,
+                                        palette.on_accent,
+                                    ))
+                                    .test_support()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.player.update(cx, |player, cx| player.toggle(cx));
+                                    })),
+                            ))
+                            .child(components::press_feedback(
+                                "next-feedback",
+                                components::icon_button(palette, "next", CadenceIcon::SkipForward)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.player.update(cx, |player, cx| player.next(cx));
+                                    })),
+                            ))
+                            .child(div().size_10()),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(PROGRESS_GAP)
+                            .text_size(tokens::CAPTION_TEXT)
+                            .text_color(rgb(palette.text_muted))
+                            .child(div().w(PROGRESS_TIME_WIDTH).flex_none().text_right().child(
+                                format_duration(
+                                    self.scrubber.displayed_ms(position_ms, duration_ms),
+                                ),
+                            ))
+                            .child(self.seek_bar(
+                                palette,
+                                position_ms,
+                                duration_ms,
+                                progress_slider_width,
+                                window,
+                                cx,
+                            ))
+                            .child(div().w(PROGRESS_TIME_WIDTH).flex_none().child(duration)),
+                    ),
+            )
+            .child(
+                div()
+                    .w(if compact {
+                        COMPACT_PLAYER_RIGHT_WIDTH
+                    } else {
+                        PLAYER_RIGHT_WIDTH
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(self.queue_button(palette, window, cx))
+                    .child(
+                        components::icon_button(palette, "volume", volume_icon)
+                            .test_support()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.player.update(cx, |player, cx| player.toggle_mute(cx));
+                            })),
+                    )
+                    .when(!compact, |controls| {
+                        controls.child(
+                            div()
+                                .id("volume-slider")
+                                .test_support()
+                                .w(VOLUME_SLIDER_WIDTH)
+                                .h_6()
+                                .flex()
+                                .items_center()
+                                .on_mouse_down(
+                                    gpui_kit::MouseButton::Left,
+                                    cx.listener(
+                                        |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                                            this.player.update(cx, |player, cx| {
+                                                player.begin_volume_drag(
+                                                    event.position.x,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        },
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .relative()
+                                        .w_full()
+                                        .h(VOLUME_TRACK_HEIGHT)
+                                        .rounded_full()
+                                        .bg(rgb(palette.surface_raised))
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(VOLUME_SLIDER_WIDTH * volume)
+                                                .rounded_full()
+                                                .bg(rgb(palette.text_primary)),
+                                        )
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .left(volume_thumb_left)
+                                                .top(volume_thumb_top)
+                                                .size(VOLUME_THUMB_SIZE)
+                                                .rounded_full()
+                                                .bg(rgb(palette.text_primary))
+                                                .border_2()
+                                                .border_color(rgb(palette.surface)),
+                                        ),
+                                ),
+                        )
+                    }),
+            )
+    }
+}
+
+impl Render for PlayerBar {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.bar(window, cx)
+    }
+}
+
+/// Stable track information is cached independently of the progress/volume
+/// controls. A clock tick retains one Arc instead of copying Track/artist Vecs.
+struct PlayerMetadata {
+    #[cfg(test)]
+    renders: usize,
+    track: Option<Arc<model::Track>>,
+    image_cache: Entity<image_cache::BoundedImageCache>,
+}
+impl EventEmitter<page::PageEvent> for PlayerMetadata {}
+impl PlayerMetadata {
     fn navigate_on_click(
         event: page::PageEvent,
         cx: &mut Context<Self>,
@@ -262,291 +581,29 @@ impl PlayerBar {
             .child(name)
             .into_any_element()
     }
-
-    fn bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = appearance::Appearance::palette(cx);
-        let viewport_width = window.viewport_size().width;
-        let rem_size = window.rem_size();
-        let compact = uses_compact_player_layout(viewport_width, rem_size);
-        let progress_slider_width = if compact {
-            compact_progress_slider_width(viewport_width, rem_size)
-        } else {
-            PROGRESS_SLIDER_WIDTH
-        };
-        let player = self.player.read(cx);
-        let now_playing = player.now_playing().cloned();
-        let playing = player.playing();
-        let shuffle = player.shuffle();
-        let position_ms = player.position_ms(cx.background_executor().now());
-        let volume = player.volume();
-        let volume_thumb_left = (VOLUME_SLIDER_WIDTH - VOLUME_THUMB_SIZE) * volume;
-        let volume_thumb_top = (VOLUME_TRACK_HEIGHT - VOLUME_THUMB_SIZE) / 2.;
-        let live_track = now_playing.is_some();
-        let mascot = services::AppServices::preferences(cx).mascot;
-        let reduce_motion = cx.reduce_motion();
-        let show_mascot = live_track && mascot != MascotPreference::None;
-        if !show_mascot {
-            let target = f32::from(playing);
-            self.mascot_playing = playing;
-            self.mascot_transition_from = target;
-            self.mascot_transition_duration = mascot_transition_duration(playing, 0.);
-            self.mascot_reveal.set(target);
-        } else if self.mascot_playing != playing {
-            self.mascot_transition_from = self.mascot_reveal.get();
-            let target = f32::from(playing);
-            let remaining = (target - self.mascot_transition_from).abs();
-            self.mascot_transition_duration = mascot_transition_duration(playing, remaining);
-            self.mascot_playing = playing;
-            self.mascot_transition_generation = self.mascot_transition_generation.wrapping_add(1);
+}
+impl Render for PlayerMetadata {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
         }
-        let render_mascot = show_mascot && (playing || self.mascot_reveal.get() > 0.);
-        let duration = SharedString::from(now_playing.as_ref().map_or_else(
-            || "0:00".to_owned(),
-            |track| format_duration(track.duration_ms),
-        ));
-        let volume_icon = if volume == 0. {
-            CadenceIcon::SpeakerMuted
-        } else {
-            CadenceIcon::Speaker
-        };
-        let duration_ms = now_playing.as_ref().map_or(0, |track| track.duration_ms);
+        let palette = appearance::Appearance::palette(cx);
+        let track = self.track.clone();
         div()
-            .relative()
-            .h_24()
             .w_full()
-            .flex_none()
+            .min_w_0()
             .flex()
             .items_center()
-            .justify_between()
-            .gap_6()
-            .px_6()
-            .bg(rgb(palette.surface))
-            .border_t_1()
-            .border_color(rgb(palette.border))
-            .when(render_mascot, |bar| {
-                let from = self.mascot_transition_from;
-                let target = f32::from(playing);
-                let reveal = self.mascot_reveal.clone();
-                let generation = self.mascot_transition_generation as usize;
-                let animation = Animation::new(self.mascot_transition_duration)
-                    .with_easing(ease_out_quint())
-                    .with_max_fps(60.);
-                bar.child(
-                    player_mascot::render(position_ms, mascot, reduce_motion).with_animation(
-                        ("mascot-reveal", generation),
-                        animation,
-                        move |mascot, delta| {
-                            let progress = from + (target - from) * delta;
-                            reveal.set(progress);
-                            let bottom = player_mascot::HIDDEN_BOTTOM
-                                + (player_mascot::VISIBLE_BOTTOM - player_mascot::HIDDEN_BOTTOM)
-                                    * progress;
-                            mascot.bottom(px(bottom))
-                        },
-                    ),
-                )
-            })
+            .gap_3()
+            .child(self.artwork_link(palette, track.as_deref(), cx))
             .child(
                 div()
-                    .absolute()
-                    .inset_0()
-                    .bg(rgb(palette.surface))
-                    .border_t_1()
-                    .border_color(rgb(palette.border)),
+                    .flex_1()
+                    .min_w_0()
+                    .child(Self::title_line(palette, track.as_deref(), window, cx))
+                    .child(Self::credits_line(palette, track.as_deref(), window, cx)),
             )
-            .child(
-                div()
-                    .w(if compact {
-                        COMPACT_PLAYER_LEFT_WIDTH
-                    } else {
-                        PLAYER_LEFT_WIDTH
-                    })
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(self.artwork_link(palette, now_playing.as_ref(), cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(Self::title_line(palette, now_playing.as_ref(), window, cx))
-                            .child(Self::credits_line(
-                                palette,
-                                now_playing.as_ref(),
-                                window,
-                                cx,
-                            )),
-                    ),
-            )
-            .child(
-                div()
-                    .w(if compact {
-                        progress_slider_width + PROGRESS_TIME_WIDTH * 2. + PROGRESS_GAP * 2.
-                    } else {
-                        PLAYER_CENTER_WIDTH
-                    })
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                components::icon_button(palette, "shuffle", CadenceIcon::Shuffle)
-                                    .when(shuffle, |button| button.bg(rgb(palette.selection)))
-                                    .tooltip(move |window, cx| {
-                                        gpui_kit::component::tooltip::Tooltip::new(if shuffle {
-                                            "Shuffle on"
-                                        } else {
-                                            "Shuffle off"
-                                        })
-                                        .build(window, cx)
-                                    })
-                                    .test_support()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.player
-                                            .update(cx, |player, cx| player.toggle_shuffle(cx));
-                                    })),
-                            )
-                            .child(
-                                components::icon_button(palette, "previous", CadenceIcon::SkipBack)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.player.update(cx, |player, cx| player.previous(cx));
-                                    })),
-                            )
-                            .child(
-                                components::filled_button(palette, "play-toggle")
-                                    .aria_label(if playing { "Pause" } else { "Play" })
-                                    .hover(|style| style.opacity(0.9))
-                                    .size_10()
-                                    .rounded_full()
-                                    .bg(rgb(palette.text_primary))
-                                    .child(components::icon(
-                                        if playing {
-                                            CadenceIcon::Pause
-                                        } else {
-                                            CadenceIcon::Play
-                                        },
-                                        tokens::PLAYBACK_ICON,
-                                        palette.on_accent,
-                                    ))
-                                    .test_support()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.player.update(cx, |player, cx| player.toggle(cx));
-                                    })),
-                            )
-                            .child(
-                                components::icon_button(palette, "next", CadenceIcon::SkipForward)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.player.update(cx, |player, cx| player.next(cx));
-                                    })),
-                            )
-                            .child(div().size_10()),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap(PROGRESS_GAP)
-                            .text_size(tokens::CAPTION_TEXT)
-                            .text_color(rgb(palette.text_muted))
-                            .child(div().w(PROGRESS_TIME_WIDTH).flex_none().text_right().child(
-                                format_duration(
-                                    self.scrubber.displayed_ms(position_ms, duration_ms),
-                                ),
-                            ))
-                            .child(self.seek_bar(
-                                palette,
-                                position_ms,
-                                duration_ms,
-                                progress_slider_width,
-                                window,
-                                cx,
-                            ))
-                            .child(div().w(PROGRESS_TIME_WIDTH).flex_none().child(duration)),
-                    ),
-            )
-            .child(
-                div()
-                    .w(if compact {
-                        COMPACT_PLAYER_RIGHT_WIDTH
-                    } else {
-                        PLAYER_RIGHT_WIDTH
-                    })
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
-                    .child(self.queue_button(palette, window, cx))
-                    .child(
-                        components::icon_button(palette, "volume", volume_icon)
-                            .test_support()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.player.update(cx, |player, cx| player.toggle_mute(cx));
-                            })),
-                    )
-                    .when(!compact, |controls| {
-                        controls.child(
-                            div()
-                                .id("volume-slider")
-                                .test_support()
-                                .w(VOLUME_SLIDER_WIDTH)
-                                .h_6()
-                                .flex()
-                                .items_center()
-                                .on_mouse_down(
-                                    gpui_kit::MouseButton::Left,
-                                    cx.listener(
-                                        |this, event: &gpui_kit::MouseDownEvent, window, cx| {
-                                            this.player.update(cx, |player, cx| {
-                                                player.begin_volume_drag(
-                                                    event.position.x,
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                        },
-                                    ),
-                                )
-                                .child(
-                                    div()
-                                        .relative()
-                                        .w_full()
-                                        .h(VOLUME_TRACK_HEIGHT)
-                                        .rounded_full()
-                                        .bg(rgb(palette.surface_raised))
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .w(VOLUME_SLIDER_WIDTH * volume)
-                                                .rounded_full()
-                                                .bg(rgb(palette.text_primary)),
-                                        )
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .left(volume_thumb_left)
-                                                .top(volume_thumb_top)
-                                                .size(VOLUME_THUMB_SIZE)
-                                                .rounded_full()
-                                                .bg(rgb(palette.text_primary))
-                                                .border_2()
-                                                .border_color(rgb(palette.surface)),
-                                        ),
-                                ),
-                        )
-                    }),
-            )
-    }
-}
-
-impl Render for PlayerBar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.bar(window, cx)
     }
 }
 

@@ -29,6 +29,7 @@ pub(super) struct TrackList {
     scroll: gpui_kit::UniformListScrollHandle,
     hover: components::HoverHighlight,
     menu_position: Option<gpui_kit::Point<Pixels>>,
+    menu_generation: u64,
     /// Album already on screen, whose "Go to album" entry would go nowhere.
     current_album_id: Option<String>,
     library: Entity<library::Library>,
@@ -55,6 +56,7 @@ impl TrackList {
             scroll: gpui_kit::UniformListScrollHandle::new(),
             hover: components::HoverHighlight::default(),
             menu_position: None,
+            menu_generation: 0,
             current_album_id: None,
             library: services::AppServices::library(cx),
             player: services::AppServices::player(cx),
@@ -292,6 +294,7 @@ impl TrackList {
             .context_menu(
                 self.menu_position,
                 cx.listener(move |this, event: &gpui_kit::MouseDownEvent, _, cx| {
+                    this.menu_generation = this.menu_generation.wrapping_add(1);
                     this.menu_open = Some((menu_source_id.clone(), index));
                     this.menu_position = Some(event.position);
                     cx.notify();
@@ -377,7 +380,7 @@ impl TrackList {
         favorite: bool,
         is_current_track: bool,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
         let palette = appearance::Appearance::palette(cx);
         let has_playback_context = self.player.read(cx).now_playing().is_some();
         let next_track = track.clone();
@@ -409,7 +412,56 @@ impl TrackList {
                 .border_color(rgb(palette.border))
         };
 
-        components::menu_surface(palette)
+        let menu = components::solid_menu_surface(palette)
+            .w(Rems(15.5))
+            .shadow(vec![
+                gpui_kit::BoxShadow::new(px(0.), px(12.), gpui_kit::rgba(0x00000044).into())
+                    .blur_radius(px(28.)),
+            ])
+            .child(
+                div()
+                    .id(("track-menu-heading", index))
+                    .test_support()
+                    .px_2()
+                    .pt_2()
+                    .pb_3()
+                    .flex()
+                    .items_center()
+                    .gap_2p5()
+                    .child(components::artwork(
+                        palette,
+                        &self.image_cache,
+                        track.artwork_url.as_deref(),
+                        tokens::ArtworkSize {
+                            size: Rems(2.25),
+                            radius: Rems(0.375),
+                        },
+                        CadenceIcon::MusicNote,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                    .child(track.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(rgb(palette.text_muted))
+                                    .child(track.artist.clone()),
+                            ),
+                    ),
+            )
+            .child(separator())
             .on_mouse_up_out(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.close_menu(cx)),
@@ -552,7 +604,19 @@ impl TrackList {
                     cx.open_url(&track_url);
                     cx.notify();
                 })),
+            );
+        if cx.reduce_motion() {
+            menu.into_any_element()
+        } else {
+            menu.with_animation(
+                ("track-menu-entry", self.menu_generation as usize),
+                Animation::new(Duration::from_millis(150))
+                    .with_easing(ease_out_quint())
+                    .with_max_fps(60.),
+                |menu, progress| menu.opacity(progress),
             )
+            .into_any_element()
+        }
     }
 }
 

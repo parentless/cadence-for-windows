@@ -90,7 +90,7 @@ pub(super) struct Sidebar {
     hover: components::HoverHighlight,
     collapsed: bool,
     transition_generation: u64,
-    visual_width: Rc<Cell<Rems>>,
+    visual_width: Rems,
     transition_from: Rems,
     transition_duration: Duration,
     /// The toggle and navigation rows draw keyboard focus on the fill inside
@@ -143,7 +143,7 @@ impl Sidebar {
             hover: components::HoverHighlight::default(),
             collapsed,
             transition_generation: 0,
-            visual_width: Rc::new(Cell::new(width)),
+            visual_width: width,
             transition_from: width,
             transition_duration: Duration::from_millis(1),
             toggle_focus: cx.focus_handle().tab_stop(true),
@@ -209,7 +209,7 @@ impl Sidebar {
         if self.collapsed == collapsed {
             return;
         }
-        let current_width = self.visual_width.get();
+        let current_width = self.visual_width;
         let expanded_width = expanded_sidebar_width(self.compact_layout);
         let target_width = if collapsed {
             COLLAPSED_SIDEBAR_WIDTH
@@ -231,7 +231,7 @@ impl Sidebar {
 
     #[cfg(test)]
     pub(super) fn rendered_width(&self) -> Rems {
-        self.visual_width.get()
+        self.visual_width
     }
 
     fn nav_item(
@@ -354,7 +354,9 @@ impl Sidebar {
         let start_width = self.transition_from;
         let animation_id = self.transition_generation as usize;
         let animation_duration = self.transition_duration;
-        let visual_width = self.visual_width.clone();
+        // Reflow the page once to its final width. Only local rail labels and
+        // fills animate, rather than repeatedly measuring the whole content grid.
+        self.visual_width = target_width;
         let width_range = expanded_width - COLLAPSED_SIDEBAR_WIDTH;
         let start_progress =
             ((start_width - COLLAPSED_SIDEBAR_WIDTH).0 / width_range.0).clamp(0., 1.);
@@ -744,15 +746,6 @@ impl Sidebar {
                         )
                     })
                     .when(!show_pinned, |panel| panel.child(div().flex_1())),
-            )
-            .with_animation(
-                ("sidebar-width", animation_id),
-                Animation::new(animation_duration).with_easing(ease_out_quint()),
-                move |sidebar, delta| {
-                    let width = interpolate_sidebar_width(start_width, target_width, delta);
-                    visual_width.set(width);
-                    sidebar.w(width)
-                },
             )
     }
 }

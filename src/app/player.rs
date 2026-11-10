@@ -12,7 +12,7 @@ impl EventEmitter<PlaybackUnavailable> for Player {}
 /// Playback state that belongs to the process rather than to a window.
 pub(super) struct Player {
     backend: BackendHandle,
-    now_playing: Option<model::Track>,
+    now_playing: Option<Arc<model::Track>>,
     context: Arc<[model::Track]>,
     playing: bool,
     shuffle: bool,
@@ -50,7 +50,11 @@ impl Player {
     }
 
     pub(super) fn now_playing(&self) -> Option<&model::Track> {
-        self.now_playing.as_ref()
+        self.now_playing.as_deref()
+    }
+
+    pub(super) fn shared_now_playing(&self) -> Option<Arc<model::Track>> {
+        self.now_playing.clone()
     }
 
     pub(super) fn context(&self) -> &Arc<[model::Track]> {
@@ -121,7 +125,8 @@ impl Player {
             return;
         }
         if let Some(track) = self.now_playing.clone() {
-            self.backend.send(BackendCommand::MarkPlayed(track));
+            self.backend
+                .send(BackendCommand::MarkPlayed((*track).clone()));
         }
         self.history_pending = false;
     }
@@ -360,7 +365,7 @@ impl Player {
             .chain(next)
             .collect::<Vec<_>>()
             .into();
-        self.now_playing = Some(current);
+        self.now_playing = Some(Arc::new(current));
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
