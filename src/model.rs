@@ -169,6 +169,26 @@ pub struct PlaylistTrackPage {
     pub total: u32,
 }
 
+/// One artist-discography page. Offsets count raw Spotify entries, including
+/// entries without a usable album ID that are omitted from `albums`.
+#[derive(Debug, Default)]
+pub struct ArtistAlbumPage {
+    pub albums: Vec<Album>,
+    pub next_offset: Option<u32>,
+    pub total: u32,
+}
+
+#[cfg(test)]
+impl From<Vec<Album>> for ArtistAlbumPage {
+    fn from(albums: Vec<Album>) -> Self {
+        Self {
+            total: u32::try_from(albums.len()).unwrap(),
+            albums,
+            next_offset: None,
+        }
+    }
+}
+
 pub const SEARCH_ARTIST_LIMIT: usize = 3;
 pub const SEARCH_ALBUM_LIMIT: usize = 4;
 pub const SEARCH_TRACK_LIMIT: usize = 5;

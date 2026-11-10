@@ -8,6 +8,8 @@ enum Scene {
     Artist,
     ArtistLoading,
     ArtistDiscography,
+    ArtistPageLoading,
+    ArtistPageFailure,
     TrackHover,
     TrackIndexHover,
     PlaylistDenied,
@@ -56,6 +58,8 @@ fn scenes() -> Vec<(&'static str, Scene)> {
     vec![
         ("artist", Scene::Artist),
         ("artist-docked", Scene::ArtistDiscography),
+        ("artist-releases-loading", Scene::ArtistPageLoading),
+        ("artist-releases-failure", Scene::ArtistPageFailure),
         ("artist-loading", Scene::ArtistLoading),
         ("track-hover", Scene::TrackHover),
         ("track-index-hover", Scene::TrackIndexHover),
@@ -159,6 +163,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         820.
     };
     let mut main_workspace = None;
+    let mut _pending_artist_page = None;
     let handle = if matches!(scene, Scene::Setup | Scene::SetupFilled) {
         cx.update(|cx| {
             services::AppServices::session(cx).update(cx, |session, cx| {
@@ -179,7 +184,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         main_workspace = Some(workspace.clone());
         cx.update(|cx| {
             workspace.update(cx, |workspace, cx| match scene {
-                Scene::Artist | Scene::ArtistDiscography
+                Scene::Artist | Scene::ArtistDiscography | Scene::ArtistPageLoading | Scene::ArtistPageFailure
                 | Scene::ArtistMenu
                 | Scene::ArtistPortrait
                 | Scene::ArtistLandscape | Scene::ArtistZoomLarge => {
@@ -225,7 +230,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                                         artwork_url: Some(url.into()),
                                     },
                                     vec![track(0), track(1), track(2)],
-                                    (0..20)
+                                    model::ArtistAlbumPage { albums: (0..if matches!(scene, Scene::ArtistPageLoading | Scene::ArtistPageFailure) { 10 } else { 20 })
                                         .map(|index| model::Album {
                                             provider: model::Provider::Spotify,
                                             source_id: format!("fixture-album-{index}"),
@@ -236,7 +241,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                                             artwork_url: Some(url.into()),
                                             track_count: Some(10),
                                         })
-                                        .collect(),
+                                        .collect(), next_offset: matches!(scene, Scene::ArtistPageLoading | Scene::ArtistPageFailure).then_some(10), total: 20 },
                                 )))
                                 .expect("artist fixture reply");
                         }
@@ -266,7 +271,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     }
                     workspace.open_artist(model::ArtistRef { name: artist.name.clone(), source_id: Some(artist.source_id.clone()), spotify_uri: artist.spotify_uri.clone() }, Route::LikedSongs, cx);
                     let BackendCommand::LoadArtist { respond, .. } = backend.commands.try_recv().unwrap() else { panic!() };
-                    respond.send(Ok((artist, tracks.clone(), albums))).unwrap();
+                    respond.send(Ok((artist, tracks.clone(), albums.into()))).unwrap();
                     services::AppServices::player(cx).update(cx, |player, cx| { player.handle_backend_event(BackendEvent::PlaybackSnapshotLoaded { current: tracks[0].clone(), next: tracks[1..].to_vec(), position_ms: 60_000 }, cx); });
                 }
                 Scene::TrackCredits => {
@@ -439,6 +444,48 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
             })
             .unwrap();
             settle(&mut cx, handle.into());
+        }
+        Scene::ArtistPageLoading | Scene::ArtistPageFailure => {
+            for _ in 0..4 {
+                cx.update_window(handle.into(), |_, window, cx| {
+                    window.dispatch_event(
+                        gpui_kit::ScrollWheelEvent {
+                            position: point(px(700.), px(400.)),
+                            delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+                            ..Default::default()
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                })
+                .unwrap();
+                settle(&mut cx, handle.into());
+            }
+            let BackendCommand::LoadArtistAlbums {
+                offset: 10,
+                respond,
+                ..
+            } = backend
+                .commands
+                .try_recv()
+                .expect("visible discography requests next page")
+            else {
+                panic!("discography page request")
+            };
+            if matches!(scene, Scene::ArtistPageFailure) {
+                respond
+                    .send(Err(anyhow::anyhow!("Fixture network interruption")))
+                    .unwrap();
+            } else {
+                // Keep a live sender so the screenshot captures pending work.
+                _pending_artist_page = Some(respond);
+            }
+            settle(&mut cx, handle.into());
+            cx.update_window(handle.into(), |_, window, _| {
+                let footer = window.find("artist-discography-footer").bounds();
+                assert!(footer.bottom() <= window.viewport_size().height);
+            })
+            .unwrap();
         }
         Scene::ArtistDiscography | Scene::ReadmeGlaiveDocked => {
             cx.update_window(handle.into(), |_, window, cx| {

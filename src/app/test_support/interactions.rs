@@ -1874,7 +1874,7 @@ fn empty_artist_still_has_both_sections_after_skeleton_loading() {
                 artwork_url: None,
             },
             vec![],
-            vec![],
+            vec![].into(),
         )))
         .unwrap();
     fixture.update(|_, _| {});
@@ -1919,7 +1919,8 @@ fn artist_tracks_scroll_into_virtualized_discography_and_albums_still_open() {
                     artwork_url: None,
                     track_count: Some(10),
                 })
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
         )))
         .unwrap();
     fixture.update(|_, _| {});
@@ -2042,7 +2043,8 @@ fn short_artist_pages_fully_dock_and_back_works_after_switching_artists() {
                     release_date: None,
                     artwork_url: None,
                     track_count: Some(3),
-                }],
+                }]
+                .into(),
             )))
             .unwrap();
         fixture.update(|_, _| {});
@@ -3000,7 +3002,8 @@ fn discography_cards_fit_the_available_width_at_narrow_and_wide_sizes() {
                         release_date: None,
                         track_count: None,
                     })
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
             )))
             .unwrap();
         fixture.update(|_, _| {});
@@ -3350,4 +3353,215 @@ fn gallery_shares_one_scroll_area_and_opens_albums_without_prefetching() {
         assert_eq!(fixture.requested_album(), "album-0");
         fixture.no_commands();
     }
+}
+
+fn discography_page(
+    indices: impl IntoIterator<Item = usize>,
+    next: Option<u32>,
+    total: u32,
+) -> model::ArtistAlbumPage {
+    model::ArtistAlbumPage {
+        albums: indices
+            .into_iter()
+            .map(|index| model::Album {
+                provider: model::Provider::Spotify,
+                source_id: format!("paged-album-{index}"),
+                name: format!("Release {index}").into(),
+                spotify_uri: None,
+                artists: vec![],
+                release_date: None,
+                artwork_url: None,
+                track_count: None,
+            })
+            .collect(),
+        next_offset: next,
+        total,
+    }
+}
+
+fn open_discography(fixture: &mut Fixture, id: &str, page: model::ArtistAlbumPage) {
+    let workspace = fixture.workspace.clone().unwrap();
+    fixture.update(|_, cx| {
+        cx.set_reduce_motion(true);
+        workspace.upgrade().unwrap().update(cx, |workspace, cx| {
+            workspace.open_artist(artist_ref(id, id), Route::LikedSongs, cx);
+        });
+    });
+    let BackendCommand::LoadArtist { respond, .. } = fixture.backend.commands.try_recv().unwrap()
+    else {
+        panic!("artist request")
+    };
+    respond
+        .send(Ok((
+            model::Artist {
+                provider: model::Provider::Spotify,
+                source_id: id.into(),
+                name: id.into(),
+                spotify_uri: None,
+                artwork_url: None,
+            },
+            (0..5).map(track).collect(),
+            page,
+        )))
+        .unwrap();
+    fixture.update(|_, _| {});
+}
+
+fn scroll_discography(fixture: &mut Fixture) {
+    for _ in 0..4 {
+        fixture.update(|window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position: point(px(700.), px(400.)),
+                    delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+}
+
+fn requested_discography(
+    fixture: &mut Fixture,
+    artist: &str,
+    expected: u32,
+) -> crate::backend::Reply<model::ArtistAlbumPage> {
+    let BackendCommand::LoadArtistAlbums {
+        source_id,
+        offset,
+        respond,
+    } = fixture
+        .backend
+        .commands
+        .try_recv()
+        .expect("next discography page")
+    else {
+        panic!("discography request")
+    };
+    assert_eq!(source_id, artist);
+    assert_eq!(offset, expected);
+    respond
+}
+
+#[test]
+fn discography_loads_only_at_the_visible_footer_and_appends_in_order_without_duplicates_or_scroll_jumps()
+ {
+    let mut fixture = Fixture::new(false);
+    open_discography(
+        &mut fixture,
+        "large-artist",
+        discography_page(0..10, Some(10), 26),
+    );
+    fixture.no_commands();
+    scroll_discography(&mut fixture);
+    let reply = requested_discography(&mut fixture, "large-artist", 10);
+    // Repaints and repeated wheel input while loading keep one request in flight.
+    scroll_discography(&mut fixture);
+    fixture.no_commands();
+    reply
+        .send(Ok(discography_page(
+            std::iter::once(9).chain(10..19),
+            Some(20),
+            26,
+        )))
+        .unwrap();
+    fixture.update(|_, _| {});
+    // The appended rows extend below the viewport rather than snapping to their footer.
+    fixture.no_commands();
+    scroll_discography(&mut fixture);
+    let reply = requested_discography(&mut fixture, "large-artist", 20);
+    reply.send(Ok(discography_page(19..25, None, 26))).unwrap();
+    fixture.update(|_, _| {});
+    scroll_discography(&mut fixture);
+    fixture.no_commands();
+    fixture.update(|window, cx| {
+        assert!(
+            window.try_find("artist-discography-footer").is_none(),
+            "completed catalog kept a load-more footer"
+        );
+        window.click(("artist-album", 24usize), cx);
+    });
+    // A repeated ID across the page boundary did not shift the final card's identity.
+    assert_eq!(fixture.requested_album(), "paged-album-24");
+    fixture.no_commands();
+}
+
+#[test]
+fn discography_failure_keeps_loaded_albums_and_retries_only_on_request() {
+    let mut fixture = Fixture::new(false);
+    open_discography(
+        &mut fixture,
+        "retry-artist",
+        discography_page(0..10, Some(10), 20),
+    );
+    scroll_discography(&mut fixture);
+    requested_discography(&mut fixture, "retry-artist", 10)
+        .send(Err(anyhow::anyhow!("temporary Spotify failure")))
+        .unwrap();
+    fixture.update(|_, _| {});
+    scroll_discography(&mut fixture);
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click("artist-load-more", cx));
+    requested_discography(&mut fixture, "retry-artist", 10)
+        .send(Ok(discography_page(10..20, None, 20)))
+        .unwrap();
+    fixture.update(|_, _| {});
+    scroll_discography(&mut fixture);
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click(("artist-album", 19usize), cx));
+    assert_eq!(fixture.requested_album(), "paged-album-19");
+}
+
+#[test]
+fn switching_artists_cancels_a_pending_discography_page() {
+    let mut fixture = Fixture::new(false);
+    open_discography(
+        &mut fixture,
+        "first-artist",
+        discography_page(0..10, Some(10), 100),
+    );
+    scroll_discography(&mut fixture);
+    let old = requested_discography(&mut fixture, "first-artist", 10);
+    open_discography(
+        &mut fixture,
+        "second-artist",
+        discography_page(100..103, None, 3),
+    );
+    assert!(
+        old.is_closed(),
+        "abandoned page receiver should cancel its backend fetch"
+    );
+    assert!(old.send(Ok(discography_page(10..20, None, 20))).is_err());
+    fixture.update(|_, _| {});
+    fixture.no_commands();
+    scroll_discography(&mut fixture);
+    fixture.update(|window, cx| window.click(("artist-album", 2usize), cx));
+    assert_eq!(fixture.requested_album(), "paged-album-102");
+}
+
+#[test]
+fn duplicate_only_discography_pages_require_manual_continuation_instead_of_auto_draining_the_catalog()
+ {
+    let mut fixture = Fixture::new(false);
+    open_discography(
+        &mut fixture,
+        "duplicates",
+        discography_page(0..10, Some(10), 30),
+    );
+    scroll_discography(&mut fixture);
+    requested_discography(&mut fixture, "duplicates", 10)
+        .send(Ok(discography_page(0..10, Some(20), 30)))
+        .unwrap();
+    fixture.update(|_, _| {});
+    scroll_discography(&mut fixture);
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click("artist-load-more", cx));
+    requested_discography(&mut fixture, "duplicates", 20)
+        .send(Ok(discography_page(10..20, None, 30)))
+        .unwrap();
+    fixture.update(|_, _| {});
+    scroll_discography(&mut fixture);
+    fixture.no_commands();
 }

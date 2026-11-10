@@ -227,3 +227,32 @@ alive without a window. Closing the last window now invokes normal application
 shutdown, saving playback position and stopping the backend/Discord services.
 macOS retains its standard Dock/menu-bar lifetime. Window reconciliation opens
 a replacement before closing the old window, preserving sign-in transitions.
+
+# Artist discography pagination (0.8.17)
+
+An artist opens with ten release records. Additional ten-record pages are
+requested only when the end of the loaded grid enters the clipped viewport,
+one request at a time. There is no catalog-wide prefetch, timer, or scroll-time
+sorting. A failed page keeps the existing releases visible and offers Retry;
+a page containing only duplicate or unusable IDs requires explicit continuation
+instead of automatically walking the rest of the catalog. Raw Spotify offsets
+advance by response entries, including entries without usable IDs.
+
+Loaded releases are ordered by release date descending across page boundaries.
+Year-only and month-only dates use January 1 and the first of the month;
+missing/invalid dates sort last and equal dates retain arrival order. Spotify's
+endpoint does not expose an ordering parameter: dates of unseen pages cannot
+be compared until those pages arrive. Normally ordered responses append without
+moving existing records. Out-of-order arrivals use binary insertion, preserving
+the visible album's row anchor. All of this runs when a page finishes loading.
+
+Album rows remain virtualized. Appending preserves already measured row heights;
+only the old footer and newly added rows need measurement. Artwork uses the
+existing shared bounded cache. The current artist retains only visited release
+metadata and an ID deduplication set, both released when switching artists or
+clearing the page. Dropping a page request cancels its read-only HTTP future;
+late replies cannot overwrite another artist. No additional persistent cache is
+created. Tests cover raw cursor handling, partial dates, cross-page sorting,
+duplicate pages, retry, single-flight requests, route cancellation, scroll
+anchors and release of retained allocations. This is structural/test evidence,
+not a claim of measured Windows CPU, GPU or long-running heap usage.

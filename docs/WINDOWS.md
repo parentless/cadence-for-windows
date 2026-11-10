@@ -225,3 +225,8 @@ Submitted search shows a bounded Gallery of Top Artists, Top Albums, and Songs,
 with one shared scroll area and no public-playlist discovery. Album header
 artist names open their profiles using the loaded Spotify IDs. Closing the last
 Windows window exits Cadence, stopping playback and its background services.
+
+
+Artist discographies load additional releases as you reach the end of the grid,
+in ten-release pages. Loaded releases sort newest first, with missing dates
+last. A failed page offers Retry without clearing the releases already shown.

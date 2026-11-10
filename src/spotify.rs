@@ -632,40 +632,86 @@ impl Spotify {
         .await
     }
 
-    pub async fn artist(&self, source_id: &str) -> Result<(Artist, Vec<Track>, Vec<Album>)> {
+    pub async fn artist(
+        &self,
+        source_id: &str,
+    ) -> Result<(Artist, Vec<Track>, crate::model::ArtistAlbumPage)> {
         self.gated(self.artist_request(source_id)).await
     }
 
-    async fn artist_request(&self, source_id: &str) -> Result<(Artist, Vec<Track>, Vec<Album>)> {
+    async fn artist_request(
+        &self,
+        source_id: &str,
+    ) -> Result<(Artist, Vec<Track>, crate::model::ArtistAlbumPage)> {
         let artist_id = ArtistId::from_id(source_id)?;
         let artist = self
             .client
             .artist(artist_id.as_ref())
             .await
             .context("could not load Spotify artist metadata")?;
-        let albums = self
-            .client
-            .artist_albums_manual(
-                artist_id.as_ref(),
-                [AlbumType::Album, AlbumType::Single, AlbumType::Compilation],
-                None,
-                // Spotify Development Mode rejects artist-album limits above 10.
-                Some(10),
-                None,
-            )
-            .await
-            .context("could not load Spotify artist albums")?
-            .items;
+        let albums = self.artist_albums_request(artist_id.as_ref(), 0).await?;
         let mut artist = convert_artist(artist);
-        let albums = albums
-            .into_iter()
-            .filter_map(convert_simplified_album)
-            .collect::<Vec<_>>();
         if artist.artwork_url.is_none() {
-            artist.artwork_url = albums.iter().find_map(|album| album.artwork_url.clone());
+            artist.artwork_url = albums
+                .albums
+                .iter()
+                .find_map(|album| album.artwork_url.clone());
         }
         let tracks = self.artist_popular_tracks(artist_id, &artist).await?;
         Ok((artist, tracks, albums))
+    }
+
+    pub async fn artist_albums_page(
+        &self,
+        source_id: &str,
+        offset: u32,
+    ) -> Result<crate::model::ArtistAlbumPage> {
+        let id = ArtistId::from_id(source_id)?;
+        self.gated(self.artist_albums_request(id, offset)).await
+    }
+
+    async fn artist_albums_request(
+        &self,
+        id: ArtistId<'_>,
+        offset: u32,
+    ) -> Result<crate::model::ArtistAlbumPage> {
+        let page = self
+            .client
+            .artist_albums_manual(
+                id,
+                [AlbumType::Album, AlbumType::Single, AlbumType::Compilation],
+                None,
+                Some(10),
+                Some(offset),
+            )
+            .await
+            .context("could not load Spotify artist albums")?;
+        anyhow::ensure!(
+            page.offset == offset,
+            "Spotify returned an unexpected artist-album offset"
+        );
+        let next_offset = if page.next.is_some() {
+            let count = u32::try_from(page.items.len())?;
+            let next = offset
+                .checked_add(count)
+                .context("artist-album offset overflow")?;
+            anyhow::ensure!(
+                next > offset,
+                "Spotify returned a non-advancing artist-album page"
+            );
+            Some(next)
+        } else {
+            None
+        };
+        Ok(crate::model::ArtistAlbumPage {
+            albums: page
+                .items
+                .into_iter()
+                .filter_map(convert_simplified_album)
+                .collect(),
+            next_offset,
+            total: page.total,
+        })
     }
 
     async fn artist_popular_tracks(&self, id: ArtistId<'_>, artist: &Artist) -> Result<Vec<Track>> {
@@ -1148,6 +1194,118 @@ mod tests {
             gate: Arc::default(),
             top_tracks_unavailable: Arc::default(),
         }
+    }
+
+    fn discography_album_json(index: usize) -> serde_json::Value {
+        serde_json::json!({"album_type":"album", "artists":[], "external_urls":{}, "id":format!("album{index}"), "images":[], "name":format!("Release {index}"), "release_date":"2026"})
+    }
+
+    #[tokio::test]
+    async fn artist_album_pages_keep_raw_cursors_order_and_small_requests_without_fetching_the_catalog_upfront()
+     {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let spotify = test_client(listener.local_addr().unwrap()).await;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        let server = tokio::spawn(async move {
+            for (offset, range, next) in [
+                (0, 0..10, Some("https://api.spotify.com/next")),
+                (10, 10..13, None),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let count = socket.read(&mut bytes).await.unwrap();
+                let request = String::from_utf8_lossy(&bytes[..count]);
+                assert!(
+                    request.starts_with("GET /v1/artists/drake/albums?"),
+                    "{request}"
+                );
+                assert!(request.contains("limit=10"));
+                assert!(request.contains(&format!("offset={offset}")));
+                assert!(
+                    request.contains("include_groups=album%2Csingle%2Ccompilation"),
+                    "{request}"
+                );
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let items = range
+                    .map(|index| {
+                        let mut album = discography_album_json(index);
+                        if index == 3 {
+                            album["id"] = serde_json::Value::Null;
+                        }
+                        album
+                    })
+                    .collect::<Vec<_>>();
+                let body = serde_json::json!({"href":"", "items":items, "limit":10,"next":next,"offset":offset,"previous":null,"total":13}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let first = timeout(
+            Duration::from_secs(3),
+            spotify.artist_albums_page("drake", 0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(first.total, 13);
+        assert_eq!(first.albums.len(), 9);
+        assert_eq!(first.next_offset, Some(10));
+        assert_eq!(first.albums[3].source_id, "album4");
+        let last = timeout(
+            Duration::from_secs(3),
+            spotify.artist_albums_page("drake", first.next_offset.unwrap()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            last.albums
+                .iter()
+                .map(|a| a.source_id.as_str())
+                .collect::<Vec<_>>(),
+            ["album10", "album11", "album12"]
+        );
+        assert_eq!(last.next_offset, None);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn artist_album_paging_rejects_nonadvancing_mismatched_and_overflowing_offsets() {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let spotify = test_client(listener.local_addr().unwrap()).await;
+        let server = tokio::spawn(async move {
+            for (offset, items) in [
+                (20, vec![]),
+                (0, vec![discography_album_json(1)]),
+                (u32::MAX, vec![discography_album_json(1)]),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                assert!(socket.read(&mut bytes).await.unwrap() > 0);
+                let body = serde_json::json!({"href":"", "items":items, "limit":10,"next":"https://api.spotify.com/next","offset":offset,"previous":null,"total":100}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        for (offset, message) in [
+            (20, "non-advancing"),
+            (20, "unexpected"),
+            (u32::MAX, "overflow"),
+        ] {
+            let error = timeout(
+                Duration::from_secs(3),
+                spotify.artist_albums_page("drake", offset),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+            assert!(format!("{error:#}").contains(message), "{error:#}");
+        }
+        server.await.unwrap();
     }
 
     #[tokio::test]

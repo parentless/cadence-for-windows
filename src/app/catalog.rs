@@ -505,15 +505,69 @@ impl PlaylistPage {
 /// Equal breathing room above and below detail-page artwork.
 const DETAIL_HEADER_PADDING: Rems = Rems(3.5);
 
+/// ISO release dates sort chronologically without allocating or adding a date
+/// library. Spotify also returns year-only and month-only precision.
+fn album_release_key(album: &model::Album) -> Option<(u16, u8, u8)> {
+    let date = album.release_date.as_deref()?;
+    let bytes = date.as_bytes();
+    if !matches!(bytes.len(), 4 | 7 | 10) {
+        return None;
+    }
+    let digits = |part: &[u8]| {
+        part.iter().try_fold(0u16, |value, digit| {
+            digit
+                .is_ascii_digit()
+                .then(|| value * 10 + u16::from(digit - b'0'))
+        })
+    };
+    let year = digits(&bytes[..4])?;
+    if year == 0 {
+        return None;
+    }
+    let month = if bytes.len() >= 7 {
+        if bytes[4] != b'-' {
+            return None;
+        }
+        u8::try_from(digits(&bytes[5..7])?).ok()?
+    } else {
+        1
+    };
+    let day = if bytes.len() == 10 {
+        if bytes[7] != b'-' {
+            return None;
+        }
+        u8::try_from(digits(&bytes[8..10])?).ok()?
+    } else {
+        1
+    };
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => {
+            29
+        }
+        2 => 28,
+        _ => return None,
+    };
+    (day > 0 && day <= days).then_some((year, month, day))
+}
+
 pub(super) struct ArtistPage {
     backend: BackendHandle,
     reference: Option<model::ArtistRef>,
     artist: Option<model::Artist>,
     tracks: Arc<[model::Track]>,
-    albums: Arc<[model::Album]>,
+    albums: Vec<model::Album>,
+    album_ids: HashSet<String>,
+    next_album_offset: Option<u32>,
+    album_total: u32,
+    auto_load_albums: bool,
+    album_error: Option<SharedString>,
+    album_request: Option<gpui_kit::Task<()>>,
     content_state: gpui_kit::ListState,
-    content_layout: Option<(usize, usize, usize, Pixels, bool)>,
+    content_layout: Option<(usize, usize, usize, Pixels, bool, bool)>,
     content_columns: usize,
+    pending_album_anchor: Option<gpui_kit::ListOffset>,
     pub(super) header_motion: Entity<artist_header::ArtistHeader>,
     loaded: bool,
     error: Option<SharedString>,
@@ -553,11 +607,18 @@ impl ArtistPage {
             reference: None,
             artist: None,
             tracks: Arc::default(),
-            albums: Arc::default(),
+            albums: Vec::new(),
+            album_ids: HashSet::new(),
+            next_album_offset: None,
+            album_total: 0,
+            auto_load_albums: false,
+            album_error: None,
+            album_request: None,
             content_state,
             header_motion,
             content_layout: None,
             content_columns: 1,
+            pending_album_anchor: None,
             loaded: false,
             error: None,
             loaded_at: None,
@@ -592,15 +653,25 @@ impl ArtistPage {
         if !same_artist {
             self.artist = None;
             self.tracks = Arc::default();
-            self.albums = Arc::default();
+            self.albums = Vec::new();
+            self.album_ids = HashSet::new();
+            self.next_album_offset = None;
+            self.album_total = 0;
+            self.auto_load_albums = false;
+            self.album_error = None;
+            self.album_request = None;
             self.loaded = false;
             self.loaded_at = None;
             self.content_layout = None;
+            self.pending_album_anchor = None;
             self.header_motion.update(cx, |header, cx| header.reset(cx));
         } else if retrying_failure {
             self.loaded = false;
         }
         if should_refresh {
+            self.album_request = None;
+            self.album_error = None;
+            self.next_album_offset = None;
             let reply = request(&self.backend, |respond| BackendCommand::LoadArtist {
                 source_id,
                 respond,
@@ -613,7 +684,9 @@ impl ArtistPage {
                         Ok((artist, tracks, albums)) => {
                             page.artist = Some(artist);
                             page.tracks = tracks.into();
-                            page.albums = albums.into();
+                            page.albums = Vec::new();
+                            page.album_ids = HashSet::new();
+                            page.append_album_page(albums);
                             page.loaded = true;
                             page.error = None;
                             page.loaded_at = Some(SystemTime::now());
@@ -637,14 +710,223 @@ impl ArtistPage {
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.request = None;
+        self.track_list.update(cx, |list, cx| list.clear(cx));
+        self.content_layout = None;
+        self.content_state.reset(0);
+        self.pending_album_anchor = None;
         self.reference = None;
         self.artist = None;
         self.tracks = Arc::default();
-        self.albums = Arc::default();
+        self.albums = Vec::new();
+        self.album_ids = HashSet::new();
+        self.next_album_offset = None;
+        self.album_total = 0;
+        self.auto_load_albums = false;
+        self.album_error = None;
+        self.album_request = None;
         self.loaded = false;
         self.error = None;
         self.loaded_at = None;
         cx.notify();
+    }
+
+    fn append_album_page(&mut self, result: model::ArtistAlbumPage) {
+        let before = self.albums.len();
+        let anchor = self.content_state.logical_scroll_top();
+        let columns = self
+            .content_layout
+            .map_or(self.content_columns, |layout| layout.2);
+        let mut anchored_album = anchor
+            .item_ix
+            .checked_sub(2)
+            .and_then(|row| row.checked_mul(columns))
+            .filter(|index| *index < before);
+        let original_anchor = anchored_album;
+        for album in result.albums {
+            if !self.album_ids.insert(album.source_id.clone()) {
+                continue;
+            }
+            let key = album_release_key(&album);
+            // The normal newest-first response appends in O(1). Only an
+            // out-of-order release needs a binary search and an in-place move.
+            let index = if self
+                .albums
+                .last()
+                .is_none_or(|last| album_release_key(last) >= key)
+            {
+                self.albums.len()
+            } else {
+                self.albums
+                    .partition_point(|existing| album_release_key(existing) >= key)
+            };
+            if let Some(anchored) = anchored_album.as_mut()
+                && index <= *anchored
+            {
+                *anchored += 1;
+            }
+            self.albums.insert(index, album);
+        }
+        if anchored_album != original_anchor {
+            self.pending_album_anchor = anchored_album.map(|index| gpui_kit::ListOffset {
+                item_ix: 2 + index / columns,
+                offset_in_item: anchor.offset_in_item,
+            });
+        }
+        self.next_album_offset = result.next_offset;
+        self.album_total = result.total;
+        // A page with no new usable IDs must not automatically drain the
+        // catalog. Leave an explicit continuation button for that case.
+        self.auto_load_albums = self.albums.len() > before;
+    }
+
+    fn load_more_albums(&mut self, cx: &mut Context<Self>) {
+        if !self.loaded
+            || self.error.is_some()
+            || self.album_request.is_some()
+            || self.request.is_some()
+        {
+            return;
+        }
+        let Some(offset) = self.next_album_offset else {
+            return;
+        };
+        let Some(source_id) = self
+            .reference
+            .as_ref()
+            .and_then(|artist| artist.source_id.clone())
+        else {
+            return;
+        };
+        self.album_error = None;
+        let reply = request(&self.backend, {
+            let source_id = source_id.clone();
+            move |respond| BackendCommand::LoadArtistAlbums {
+                source_id,
+                offset,
+                respond,
+            }
+        });
+        self.album_request = Some(cx.spawn(async move |this, cx| {
+            let result = reply.await;
+            let _ = this.update(cx, |page, cx| {
+                if page
+                    .reference
+                    .as_ref()
+                    .and_then(|artist| artist.source_id.as_deref())
+                    != Some(source_id.as_str())
+                    || page.next_album_offset != Some(offset)
+                {
+                    return;
+                }
+                page.album_request = None;
+                match result {
+                    Ok(result) => page.append_album_page(result),
+                    Err(error) => page.album_error = Some(error),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn discography_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = appearance::Appearance::palette(cx);
+        let error = self.album_error.clone();
+        let loading = self.album_request.is_some();
+        let label = if error.is_some() {
+            "Retry"
+        } else if loading {
+            "Loading releases…"
+        } else {
+            "Load more releases"
+        };
+        div()
+            .id("artist-discography-footer")
+            .test_support()
+            .relative()
+            .w_full()
+            .h_16()
+            .px_8()
+            .flex()
+            .items_center()
+            .gap_3()
+            .when(error.is_some(), |footer| {
+                footer.child(components::page_detail(
+                    palette,
+                    "Couldn't load more releases",
+                ))
+            })
+            .child(
+                components::button(palette, "artist-load-more")
+                    .test_support()
+                    .h_10()
+                    .px_3()
+                    .rounded_lg()
+                    .text_color(rgb(palette.text_primary))
+                    .when(!loading, |button| {
+                        button.hover(|style| style.bg(rgb(palette.surface_hover)))
+                    })
+                    .child(label)
+                    .when_some(error, |button, error| {
+                        button.tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(error.clone())
+                                .build(window, cx)
+                        })
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.load_more_albums(cx))),
+            )
+            .child(
+                gpui_kit::canvas(
+                    {
+                        let page = cx.weak_entity();
+                        move |bounds, window, cx| {
+                            // Layout/overscan can construct a footer before it is on
+                            // screen. Only its actually clipped viewport triggers work.
+                            if !bounds.intersects(&window.content_mask().bounds) {
+                                return;
+                            }
+                            let candidate = page
+                                .read_with(cx, |page, _| {
+                                    (page.auto_load_albums
+                                        && page.album_request.is_none()
+                                        && page.request.is_none()
+                                        && page.album_error.is_none())
+                                    .then(|| {
+                                        page.reference
+                                            .as_ref()
+                                            .and_then(|artist| artist.source_id.clone())
+                                            .zip(page.next_album_offset)
+                                    })
+                                    .flatten()
+                                })
+                                .ok()
+                                .flatten();
+                            if let Some((id, offset)) = candidate {
+                                let page = page.clone();
+                                cx.defer(move |cx| {
+                                    let _ = page.update(cx, |page, cx| {
+                                        if page
+                                            .reference
+                                            .as_ref()
+                                            .and_then(|artist| artist.source_id.as_deref())
+                                            == Some(id.as_str())
+                                            && page.next_album_offset == Some(offset)
+                                            && page.album_error.is_none()
+                                        {
+                                            page.load_more_albums(cx);
+                                        }
+                                    });
+                                });
+                            }
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+                .size_full(),
+            )
+            .into_any_element()
     }
 
     /// Popular tracks form one small, naturally sized block. Release rows are
@@ -713,6 +995,9 @@ impl ArtistPage {
                 })
                 .into_any_element();
         }
+        if index == 2 + self.albums.len().div_ceil(columns) {
+            return self.discography_footer(cx);
+        }
         let start = (index - 2) * columns;
         let end = (start + columns).min(self.albums.len());
         let mut cards = div()
@@ -769,6 +1054,7 @@ impl ArtistPage {
             .unwrap_or("Release")
             .to_owned();
 
+        let source_id = album.source_id.clone();
         components::button(palette, ("artist-album", index))
             .test_support()
             .w(tokens::ALBUM_CARD_ARTWORK.size + Rems(1.))
@@ -813,7 +1099,16 @@ impl ArtistPage {
                     ),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(album) = this.albums.get(index) {
+                if let Some(album) = this
+                    .albums
+                    .get(index)
+                    .filter(|album| album.source_id == source_id)
+                    .or_else(|| {
+                        this.albums
+                            .iter()
+                            .find(|album| album.source_id == source_id)
+                    })
+                {
                     cx.emit(PageEvent::OpenAlbum(model::AlbumRef {
                         name: album.name.clone(),
                         source_id: Some(album.source_id.clone()),
@@ -1416,7 +1711,15 @@ impl ArtistPage {
             .as_ref()
             .and_then(|artist| artist.artwork_url.clone());
         let detail = if self.loaded && self.error.is_none() {
-            format!("Spotify artist · {} releases", self.albums.len())
+            if self.next_album_offset.is_some() {
+                format!(
+                    "Spotify artist · {} of {} releases",
+                    self.albums.len(),
+                    self.album_total
+                )
+            } else {
+                format!("Spotify artist · {} releases", self.albums.len())
+            }
         } else {
             "Spotify artist".to_owned()
         };
@@ -1514,27 +1817,40 @@ impl Render for ArtistPage {
             columns,
             window.rem_size(),
             self.loaded && self.error.is_none(),
+            self.next_album_offset.is_some(),
         );
         if self.content_layout != Some(layout) {
             let count = if layout.4 {
-                2 + self.albums.len().div_ceil(columns)
+                2 + self.albums.len().div_ceil(columns) + usize::from(layout.5)
             } else {
                 2
             };
             if let Some(old) = self.content_layout.filter(|old| old.4 && layout.4) {
                 // Resizing, zooming or refreshing a loaded page must not reset
                 // to its header. Anchor the same release when columns change.
-                let mut anchor = self.content_state.logical_scroll_top();
+                let mut anchor = self
+                    .pending_album_anchor
+                    .take()
+                    .unwrap_or_else(|| self.content_state.logical_scroll_top());
                 if anchor.item_ix >= 2 {
                     anchor.item_ix = 2 + (anchor.item_ix - 2) * old.2 / columns;
                 }
                 anchor.item_ix = anchor.item_ix.min(count.saturating_sub(1));
                 anchor.offset_in_item = anchor.offset_in_item / old.3 * layout.3;
                 let previous_count = self.content_state.item_count();
-                if previous_count != count {
-                    self.content_state.splice(2..previous_count, count - 2);
+                if old.0 == layout.0 && old.2 == layout.2 && old.3 == layout.3 && old.1 <= layout.1
+                {
+                    // Appending pages preserves measured album rows. Only the
+                    // old footer becomes new rows/a new footer; no full-grid walk.
+                    let tail = 2 + old.1.div_ceil(columns);
+                    self.content_state
+                        .splice(tail..previous_count, count - tail);
+                } else {
+                    if previous_count != count {
+                        self.content_state.splice(2..previous_count, count - 2);
+                    }
+                    self.content_state.remeasure();
                 }
-                self.content_state.remeasure();
                 self.content_state.scroll_to(anchor);
             } else {
                 self.content_state.reset(count);
@@ -1791,6 +2107,124 @@ fn page_header() -> Div {
 #[cfg(test)]
 mod retained_page_tests {
     use super::*;
+    fn dated_album(id: usize, date: Option<&str>) -> model::Album {
+        let mut album = crate::app::test_support::gallery_results().albums.remove(0);
+        album.source_id = format!("date-{id}");
+        album.release_date = date.map(str::to_owned);
+        album
+    }
+
+    #[test]
+    fn release_dates_accept_spotify_precision_and_reject_invalid_dates() {
+        for (date, expected) in [
+            (Some("2026"), Some((2026, 1, 1))),
+            (Some("2026-11"), Some((2026, 11, 1))),
+            (Some("2024-02-29"), Some((2024, 2, 29))),
+            (Some("2025-02-29"), None),
+            (Some("2026-04-31"), None),
+            (Some("2026-00-01"), None),
+            (Some("2026-12-00"), None),
+            (Some("0000"), None),
+            (Some("20x6"), None),
+            (Some("2026-1"), None),
+            (None, None),
+        ] {
+            assert_eq!(
+                album_release_key(&dated_album(0, date)),
+                expected,
+                "{date:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn later_pages_merge_newest_first_keep_equal_dates_stable_and_anchor_visible_releases() {
+        let mut cx = gpui_kit::HeadlessAppContext::with_asset_source(
+            Arc::new(gpui_kit::NoopTextSystem),
+            Arc::new(assets::CadenceAssets),
+        );
+        cx.update(|cx| {
+            let _probe = crate::app::test_support::initialize(cx, ThemePreference::Dark);
+            let page = cx.new(|cx| ArtistPage::new(services::AppServices::backend(cx), cx));
+            page.update(cx, |page, _| {
+                page.append_album_page(model::ArtistAlbumPage {
+                    albums: vec![
+                        dated_album(0, None),
+                        dated_album(1, Some("2024")),
+                        dated_album(2, Some("2026-02")),
+                    ],
+                    next_offset: Some(3),
+                    total: 7,
+                });
+                assert_eq!(
+                    page.albums
+                        .iter()
+                        .map(|a| a.source_id.as_str())
+                        .collect::<Vec<_>>(),
+                    ["date-2", "date-1", "date-0"]
+                );
+                page.content_layout = Some((0, 3, 1, px(16.), true, true));
+                page.content_state.reset(6);
+                page.content_state.scroll_to(gpui_kit::ListOffset {
+                    item_ix: 3,
+                    offset_in_item: px(12.),
+                });
+                page.append_album_page(model::ArtistAlbumPage {
+                    albums: vec![
+                        dated_album(3, Some("2026-11-09")),
+                        dated_album(4, Some("2026-02-01")),
+                        dated_album(5, Some("2025-12-31")),
+                        dated_album(1, Some("2024")),
+                    ],
+                    next_offset: None,
+                    total: 7,
+                });
+                assert_eq!(
+                    page.albums
+                        .iter()
+                        .map(|a| a.source_id.as_str())
+                        .collect::<Vec<_>>(),
+                    ["date-3", "date-2", "date-4", "date-5", "date-1", "date-0"]
+                );
+                let anchor = page.pending_album_anchor.unwrap();
+                assert_eq!(anchor.item_ix, 6);
+                assert_eq!(anchor.offset_in_item, px(12.));
+                assert_eq!(page.album_ids.len(), 6);
+            });
+        });
+    }
+
+    #[test]
+    fn clearing_artist_releases_discography_allocations_and_popular_tracks() {
+        let mut cx = gpui_kit::HeadlessAppContext::with_asset_source(
+            Arc::new(gpui_kit::NoopTextSystem),
+            Arc::new(assets::CadenceAssets),
+        );
+        cx.update(|cx| {
+            let _probe = crate::app::test_support::initialize(cx, ThemePreference::Dark);
+            let page = cx.new(|cx| ArtistPage::new(services::AppServices::backend(cx), cx));
+            let tracks: Arc<[model::Track]> = vec![crate::app::test_support::track(0)].into();
+            let weak = Arc::downgrade(&tracks);
+            page.update(cx, |page, cx| {
+                page.tracks = tracks;
+                page.track_list
+                    .update(cx, |list, cx| list.show("artist", page.tracks.clone(), cx));
+                page.append_album_page(crate::app::test_support::gallery_results().albums.into());
+                assert!(!page.albums.is_empty());
+                assert!(!page.album_ids.is_empty());
+                page.clear(cx);
+                assert_eq!(page.albums.capacity(), 0);
+                assert_eq!(page.album_ids.capacity(), 0);
+                assert_eq!(page.content_state.item_count(), 0);
+                assert!(page.next_album_offset.is_none());
+            });
+            assert!(
+                weak.upgrade().is_none(),
+                "cleared artist retained its hidden popular rows"
+            );
+        });
+    }
+
     #[test]
     fn clearing_or_replacing_search_releases_the_hidden_track_list_and_all_result_arrays() {
         let mut cx = gpui_kit::HeadlessAppContext::with_asset_source(

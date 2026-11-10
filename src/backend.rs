@@ -259,7 +259,7 @@ fn commit_fingerprint(fingerprint: &SharedFingerprint, value: LibraryFingerprint
 fn set_fingerprint(fingerprint: &SharedFingerprint, value: Option<LibraryFingerprint>) {
     *fingerprint.lock().expect("library fingerprint lock") = value;
 }
-pub type ArtistDetails = (Artist, Vec<Track>, Vec<Album>);
+pub type ArtistDetails = (Artist, Vec<Track>, crate::model::ArtistAlbumPage);
 pub type AlbumDetails = (Album, Vec<Track>);
 
 #[derive(Debug)]
@@ -301,6 +301,11 @@ pub enum BackendCommand {
     LoadArtist {
         source_id: String,
         respond: Reply<ArtistDetails>,
+    },
+    LoadArtistAlbums {
+        source_id: String,
+        offset: u32,
+        respond: Reply<crate::model::ArtistAlbumPage>,
     },
     LoadAlbum {
         source_id: String,
@@ -1255,6 +1260,15 @@ impl Worker {
             BackendCommand::LoadArtist { source_id, respond } => {
                 self.catalog
                     .artist(self.spotify.clone(), source_id, respond);
+                Ok(())
+            }
+            BackendCommand::LoadArtistAlbums {
+                source_id,
+                offset,
+                respond,
+            } => {
+                self.catalog
+                    .artist_albums(self.spotify.clone(), source_id, offset, respond);
                 Ok(())
             }
             BackendCommand::LoadAlbum { source_id, respond } => {
@@ -2509,6 +2523,7 @@ struct CatalogFetches {
     search: Option<tokio::task::JoinHandle<()>>,
     playlist: Option<tokio::task::JoinHandle<()>>,
     artist: Option<tokio::task::JoinHandle<()>>,
+    artist_albums: Option<tokio::task::JoinHandle<()>>,
     album: Option<tokio::task::JoinHandle<()>>,
     /// Seeded by the first full reload; lets later reloads answer Unchanged
     /// from the head probes alone.
@@ -2580,6 +2595,21 @@ impl CatalogFetches {
         );
     }
 
+    fn artist_albums(
+        &mut self,
+        spotify: Spotify,
+        source_id: String,
+        offset: u32,
+        respond: Reply<crate::model::ArtistAlbumPage>,
+    ) {
+        Self::start(
+            &mut self.artist_albums,
+            respond,
+            "Spotify discography request",
+            async move { spotify.artist_albums_page(&source_id, offset).await },
+        );
+    }
+
     fn album(&mut self, spotify: Spotify, source_id: String, respond: Reply<AlbumDetails>) {
         Self::start(
             &mut self.album,
@@ -2617,6 +2647,7 @@ impl CatalogFetches {
         abort_task(&mut self.search);
         abort_task(&mut self.playlist);
         abort_task(&mut self.artist);
+        abort_task(&mut self.artist_albums);
         abort_task(&mut self.album);
         // The next account's library must not compare equal to this one's.
         self.seed_fingerprint(None);
