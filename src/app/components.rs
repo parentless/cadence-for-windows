@@ -479,7 +479,6 @@ pub(super) fn rectangular_artwork(
         let cache = image_cache.clone();
         let resource = gpui_kit::Resource::Uri(url.to_owned().into());
         frame
-            .bg(rgb(palette.selection))
             .child(
                 gpui_kit::canvas(
                     move |bounds, window, cx| {
@@ -495,10 +494,10 @@ pub(super) fn rectangular_artwork(
                         })
                     },
                     move |bounds, image: Option<Arc<gpui_kit::RenderImage>>, window, _| {
+                        let radius = artwork_size.radius.to_pixels(window.rem_size());
                         if let Some(image) = image.filter(|image| image.frame_count() > 0) {
                             let fitted =
                                 gpui_kit::ObjectFit::Cover.get_bounds(bounds, image.size(0));
-                            let radius = artwork_size.radius.to_pixels(window.rem_size());
                             if let Err(error) = window.paint_image(
                                 bounds,
                                 fitted,
@@ -509,6 +508,12 @@ pub(super) fn rectangular_artwork(
                             ) {
                                 log::warn!("could not paint artwork: {error}");
                             }
+                        } else {
+                            // A placeholder replaces the missing image; it is
+                            // never an extra opaque quad behind a loaded cover.
+                            window.paint_quad(
+                                gpui_kit::fill(bounds, rgb(palette.selection)).corner_radii(radius),
+                            );
                         }
                     },
                 )

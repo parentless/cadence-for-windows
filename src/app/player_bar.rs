@@ -91,11 +91,19 @@ impl PlayerBar {
     pub(super) fn new(cx: &mut Context<Self>) -> Self {
         let player = services::AppServices::player(cx);
         let playing = player.read(cx).playing();
-        let metadata = cx.new(|cx| PlayerMetadata {
-            track: None,
-            #[cfg(test)]
-            renders: 0,
-            image_cache: services::AppServices::image_cache(cx),
+        let metadata = cx.new(|cx| {
+            let image_cache = services::AppServices::image_cache(cx);
+            let artwork_events = cx.subscribe(
+                &image_cache,
+                |_, _, _: &image_cache::ArtworkInvalidated, cx| cx.notify(),
+            );
+            PlayerMetadata {
+                track: None,
+                #[cfg(test)]
+                renders: 0,
+                image_cache,
+                _artwork_events: artwork_events,
+            }
         });
         Self {
             player,
@@ -456,6 +464,7 @@ impl Render for PlayerBar {
 /// Stable track information is cached independently of the progress/volume
 /// controls. A clock tick retains one Arc instead of copying Track/artist Vecs.
 struct PlayerMetadata {
+    _artwork_events: Subscription,
     #[cfg(test)]
     renders: usize,
     track: Option<Arc<model::Track>>,

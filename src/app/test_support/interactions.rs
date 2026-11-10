@@ -3618,3 +3618,39 @@ fn playback_clock_updates_reuse_metadata_and_shared_track_allocation() {
         "new tracks must refresh cached labels"
     );
 }
+
+#[test]
+fn artwork_cleanup_invalidates_cached_player_metadata_once_per_burst() {
+    let mut fixture = Fixture::new(false);
+    fixture.play(track(0));
+    let workspace = fixture.workspace.clone().unwrap();
+    let count = |fixture: &mut Fixture| {
+        fixture.update(|_, cx| {
+            workspace
+                .upgrade()
+                .unwrap()
+                .read(cx)
+                .player_bar
+                .read(cx)
+                .metadata_render_count(cx)
+        })
+    };
+    let before = count(&mut fixture);
+    fixture.update(|window, cx| {
+        services::AppServices::image_cache(cx).update(cx, |cache, cx| {
+            cache.clear(window, cx);
+            cache.clear(window, cx);
+        });
+    });
+    assert_eq!(
+        count(&mut fixture),
+        before + 1,
+        "cached scene was not refreshed once after artwork cleanup"
+    );
+    fixture.update(|_, _| {});
+    assert_eq!(
+        count(&mut fixture),
+        before + 1,
+        "cleanup kept invalidating while idle"
+    );
+}

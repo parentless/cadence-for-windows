@@ -26,6 +26,9 @@ struct DecodedArtwork {
 }
 type ImageLoadingTask = Shared<Task<Result<DecodedArtwork, ImageCacheError>>>;
 
+pub(super) struct ArtworkInvalidated;
+impl gpui_kit::EventEmitter<ArtworkInvalidated> for BoundedImageCache {}
+
 struct CacheEntry {
     target: u32,
     waiters: Vec<EntityId>,
@@ -93,6 +96,7 @@ pub(super) struct BoundedImageCache {
     owner: Option<WeakEntity<Self>>,
     visibility_batches: HashMap<EntityId, u64>,
     visibility_generation: u64,
+    invalidation_queued: bool,
 }
 impl BoundedImageCache {
     pub(super) fn usage(&self) -> (usize, usize, bool) {
@@ -108,6 +112,7 @@ impl BoundedImageCache {
         self.visibility_batches.clear();
         self.decoded_bytes = 0;
         self.evictions = 0;
+        self.invalidate_cached_views(cx);
     }
     pub(super) fn new(cx: &mut App) -> Entity<Self> {
         let cache = cx.new(|cx| Self {
@@ -122,6 +127,7 @@ impl BoundedImageCache {
             owner: Some(cx.weak_entity()),
             visibility_batches: HashMap::new(),
             visibility_generation: 0,
+            invalidation_queued: false,
         });
         cx.observe_release(&cache, |cache, cx| {
             for item in cache.items.values() {
@@ -459,7 +465,25 @@ impl BoundedImageCache {
         self.recency.retain(|cached| cached != resource);
         self.recency.push_back(resource.clone());
     }
+    /// Cached scene fragments must repaint if their renderer image was removed.
+    /// Collapse an eviction burst into one event; no per-image observer registry
+    /// or idle frame callback is retained.
+    fn invalidate_cached_views(&mut self, cx: &mut App) {
+        if self.invalidation_queued {
+            return;
+        }
+        if let Some(owner) = self.owner.clone() {
+            self.invalidation_queued = true;
+            cx.defer(move |cx| {
+                let _ = owner.update(cx, |cache, cx| {
+                    cache.invalidation_queued = false;
+                    cx.emit(ArtworkInvalidated);
+                });
+            });
+        }
+    }
     fn evict_to_budget(&mut self, reserved: usize, window: &mut Window, cx: &mut App) {
+        let mut dropped_image = false;
         while exceeds_cache_budget(self.items.len(), reserved, self.decoded_bytes) {
             let Some(key) = self.recency.pop_front() else {
                 break;
@@ -468,9 +492,13 @@ impl BoundedImageCache {
                 self.decoded_bytes = self.decoded_bytes.saturating_sub(entry.bytes);
                 if let Some(image) = entry.image {
                     cx.drop_image(image, Some(window));
+                    dropped_image = true;
                 }
                 self.evictions += 1;
             }
+        }
+        if dropped_image {
+            self.invalidate_cached_views(cx);
         }
     }
 }
@@ -1052,6 +1080,7 @@ mod tests {
             owner: None,
             visibility_batches: HashMap::new(),
             visibility_generation: 0,
+            invalidation_queued: false,
         };
 
         cache.touch(&first);

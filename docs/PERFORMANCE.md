@@ -272,12 +272,14 @@ with rail thumbnails. Combined decoded pixels and compressed sources retain the
 same 32 MiB budget (with the existing single-oversize exception), two workers,
 download limits and decode limits. Actual retained bytes can increase within
 that existing ceiling when more small covers fit. There is no new disk cache or
-catalog-wide image prefetch. Pending/failed covers have a static neutral fill.
+catalog-wide image prefetch. Pending/failed covers have a static neutral fill; loaded covers draw no extra placeholder quad.
 Tests exercise 80 thumbnails without refetch, cancellation before newer work,
 o network work from offscreen measurement, and the unchanged byte budget.
 
 The player holds its current track in one Arc; a cached metadata child updates
-only when that allocation changes. A 100-position-update test verifies no extra
+only when that allocation changes or its artwork is invalidated. Image eviction
+and cache clearing send one batched event to refresh cached scene fragments,
+without an accumulating per-image view registry. A 100-position-update test verifies no extra
 metadata renders and the same track allocation, followed by one refresh on a
 track change. Album/artist links and theme/size invalidation remain covered.
 Sidebar toggles assign the final content width once; local rail label/fill
