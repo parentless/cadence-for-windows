@@ -90,12 +90,12 @@ update files.
 - Artist pages use a dark grey background, rounded-corner portraits, and a
   blurred image header fading into the page. The blur is generated off the UI
   thread at up to 512 × 512 pixels and shares the bounded image cache.
-- The search bar, account menu, and track action menus use a static translucent
-  glass treatment. On artist pages the toolbar floats over the artist backdrop.
-- Right-click a Liked Songs row to open its actions menu. Its trailing
-  three-dot button is removed; other lists retain their existing buttons.
-- Closing the window keeps music and system media keys running. Launch the
-  executable again to reopen the existing instance. Use Ctrl+Q to fully exit.
+- The search bar and track action menus use a static translucent glass treatment.
+  The account menu is opaque. On artist pages the toolbar floats over the backdrop.
+- Right-click any track row to open its actions menu. Track lists share the
+  same play, favorite, navigation and context-menu behavior without trailing dots.
+- Closing the last window exits Cadence and stops playback/background services.
+  Ctrl+Q also exits; minimizing keeps music and system media keys running.
 - The sign-in window stays above the player when reauthentication is required.
 - Now Playing metadata, cover art, media buttons, and position updates use
   Windows System Media Transport Controls and a hidden window whose lifetime

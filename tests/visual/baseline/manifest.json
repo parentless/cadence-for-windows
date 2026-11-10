@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.15",
+    "cadence": "0.8.16",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "0a763a5f7eb8e0cfbaf9d57d8770f339fadfd857",
-    "lockfile_sha256": "6df438363d46c369379711aae1bb75a44ed57a81a2f487a5073170a004e4b55d"
+    "revision": "31f3718ac2632a0374afde153954fe64a5b9286c",
+    "lockfile_sha256": "fafdfd2f205490250a5419591772a63d156437e44aef81fd0c9d4a8f55c4d7f3"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42764449638",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42805816262",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,20 +57,20 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.15",
+      "cadence": "0.8.16",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "0a763a5f7eb8e0cfbaf9d57d8770f339fadfd857",
-      "lockfile_sha256": "6df438363d46c369379711aae1bb75a44ed57a81a2f487a5073170a004e4b55d"
+      "revision": "31f3718ac2632a0374afde153954fe64a5b9286c",
+      "lockfile_sha256": "fafdfd2f205490250a5419591772a63d156437e44aef81fd0c9d4a8f55c4d7f3"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42764449638"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42805816262"
   },
   "reviewed_changes": [
-    "One continuous full-size artist gradient replaces five adjacent bands, removing internal edges susceptible to fractional Windows DPI/zoom gaps and overlaps",
-    "The continuous fade has a matching page-colour end fill to avoid gradient colour-rounding seams; image extent, identity layout, Popular spacing and discography positions remain unchanged",
-    "Whole-row hover reveals the fixed index play control; the existing hover reference now activates from the row centre rather than the index",
-    "Wheel smoothing uses frame-time decay without restarting on each tick, guarantees first-frame response, tolerates small pointer jitter and cancels pending opposite-direction movement; interaction-state tests cover sustained input and settling",
-    "All 160 native references repeat exactly on macOS 15; settings references show 0.8.15",
-    "Final Windows path uses a borderless gradient and an opaque end fill to avoid enabling outer-edge antialiasing; the captured source and environment remain recorded above"
+    "Gallery replaces search tabs and playlist discovery with Top Artists, Top Albums, and Songs in one scroll area; initial and scrolled states cover both widths and appearances",
+    "Album header artist credits open their loaded profile IDs; the album fixture now includes a linked credit",
+    "Empty search and cached suggestions retain their behavior without playlist tabs; cached dropdown geometry and styling remain unchanged",
+    "Four Settings cache references change only the version label to 0.8.16",
+    "All 164 native references repeat exactly on macOS 15.8.2; 24 changed/new captures were reviewed and the remaining 140 are pixel-identical to 0.8.15",
+    "Interaction and lifetime tests cover result caps, one combined request, no detail prefetch, shared scrolling, artist/album navigation, canceled read futures, and release of replaced search arrays; Windows uses native last-window-close quit policy"
   ]
 }
