@@ -38,6 +38,7 @@ use icons::CadenceIcon;
 use library_pages::LibrarySection;
 use workspace::Workspace;
 
+mod disk_cache;
 mod http;
 mod image_cache;
 mod playlist_buffer;

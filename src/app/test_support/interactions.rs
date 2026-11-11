@@ -2634,6 +2634,8 @@ fn windows_brand_and_search_share_the_same_vertical_center() {
 #[test]
 fn settings_cache_cleanup_button_is_reachable_and_does_not_send_playback_commands() {
     let mut fixture = Fixture::new(true);
+    // Cache lives under the System tab (third).
+    fixture.update(|window, cx| window.click(("settings-tab", 2usize), cx));
     fixture.update(|window, cx| {
         let position = window.find("settings-page").bounds().center();
         window.dispatch_event(
@@ -3653,4 +3655,28 @@ fn artwork_cleanup_invalidates_cached_player_metadata_once_per_burst() {
         before + 1,
         "cleanup kept invalidating while idle"
     );
+}
+
+#[test]
+fn settings_tabs_show_one_group_at_a_time() {
+    let mut fixture = Fixture::new(true);
+    // General is the default and holds appearance and playback.
+    fixture.update(|window, _| {
+        assert!(window.try_find("settings-autoplay").is_some());
+        assert!(window.try_find("settings-clear-cache").is_none());
+        assert!(window.try_find("settings-lastfm-connect").is_none());
+    });
+    fixture.update(|window, cx| window.click(("settings-tab", 1usize), cx));
+    fixture.update(|window, _| {
+        assert!(window.try_find("settings-lastfm-connect").is_some());
+        assert!(window.try_find("settings-autoplay").is_none());
+    });
+    fixture.update(|window, cx| window.click(("settings-tab", 2usize), cx));
+    fixture.update(|window, _| {
+        assert!(window.try_find("settings-clear-cache").is_some());
+        assert!(window.try_find("settings-lastfm-connect").is_none());
+    });
+    fixture.update(|window, cx| window.click(("settings-tab", 0usize), cx));
+    fixture.update(|window, _| assert!(window.try_find("settings-autoplay").is_some()));
+    fixture.no_commands();
 }

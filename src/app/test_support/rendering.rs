@@ -430,6 +430,11 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
         }
         Scene::SettingsCache => {
             cx.update_window(handle.into(), |_, window, cx| {
+                window.click(("settings-tab", 2usize), cx);
+            })
+            .unwrap();
+            settle(&mut cx, handle.into());
+            cx.update_window(handle.into(), |_, window, cx| {
                 let position = window.find("settings-page").bounds().center();
                 window.dispatch_event(
                     gpui_kit::ScrollWheelEvent {

@@ -51,7 +51,8 @@ pub(super) fn start(cx: &mut App) -> bool {
         .unwrap_or(true);
     let status = cx.new(|_| UpdateStatus::default());
     let timer = cx.spawn(async move |cx| {
-        let mut delay = Duration::from_secs(15);
+        // Stay out of the way of startup: first paint, library load and artwork.
+        let mut delay = Duration::from_secs(60);
         loop {
             cx.background_executor().timer(delay).await;
             cx.update(|cx| {

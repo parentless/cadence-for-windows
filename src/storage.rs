@@ -820,7 +820,12 @@ impl Store {
 
     /// Update only the affected cached row. Negative positions prepend without
     /// rewriting or renumbering the rest of the library.
-    pub fn set_cached_track_liked(&mut self, track: &Track, liked: bool) -> Result<()> {
+    pub fn set_cached_track_liked(
+        &mut self,
+        track: &Track,
+        liked: bool,
+        fingerprint: Option<&LibraryFingerprint>,
+    ) -> Result<()> {
         let transaction = self.connection.transaction()?;
         transaction.execute(
             "DELETE FROM liked_tracks_cache WHERE json_extract(track_json, '$.provider') = ?1 AND json_extract(track_json, '$.source_id') = ?2",
@@ -832,10 +837,17 @@ impl Store {
                 params![serde_json::to_string(track)?],
             )?;
         }
-        transaction.execute(
-            "DELETE FROM preferences WHERE key = ?1",
-            params![LIBRARY_FINGERPRINT_KEY],
-        )?;
+        match fingerprint {
+            Some(fingerprint) => transaction.execute(
+                "INSERT INTO preferences (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![LIBRARY_FINGERPRINT_KEY, serde_json::to_string(fingerprint)?],
+            )?,
+            None => transaction.execute(
+                "DELETE FROM preferences WHERE key = ?1",
+                params![LIBRARY_FINGERPRINT_KEY],
+            )?,
+        };
         transaction.commit()?;
         Ok(())
     }
@@ -1187,19 +1199,50 @@ mod tests {
     }
 
     #[test]
+    fn a_like_persists_the_updated_fingerprint_with_the_cache_edit() {
+        let mut store = Store::in_memory().unwrap();
+        let fingerprint = LibraryFingerprint {
+            liked_head: vec!["three".into(), "one".into()],
+            liked_total: 3,
+            playlist_head: Vec::new(),
+            playlist_total: 0,
+        };
+        store
+            .replace_library_cache(&[track("one")], &[], None)
+            .unwrap();
+        store
+            .set_cached_track_liked(&track("three"), true, Some(&fingerprint))
+            .unwrap();
+        assert_eq!(
+            store.cached_library().unwrap().fingerprint,
+            Some(fingerprint)
+        );
+        store
+            .set_cached_track_liked(&track("one"), false, None)
+            .unwrap();
+        assert_eq!(store.cached_library().unwrap().fingerprint, None);
+    }
+
+    #[test]
     fn spotify_like_cache_writes_prepend_deduplicate_and_preserve_other_state() {
         let mut store = Store::in_memory().unwrap();
         store
             .replace_library_cache(&[track("one"), track("two")], &[], None)
             .unwrap();
         store.set_favorite(&track("one"), true).unwrap();
-        store.set_cached_track_liked(&track("three"), true).unwrap();
-        store.set_cached_track_liked(&track("three"), true).unwrap();
+        store
+            .set_cached_track_liked(&track("three"), true, None)
+            .unwrap();
+        store
+            .set_cached_track_liked(&track("three"), true, None)
+            .unwrap();
         assert_eq!(
             store.liked_tracks().unwrap(),
             vec![track("three"), track("one"), track("two")]
         );
-        store.set_cached_track_liked(&track("one"), false).unwrap();
+        store
+            .set_cached_track_liked(&track("one"), false, None)
+            .unwrap();
         assert_eq!(
             store.liked_tracks().unwrap(),
             vec![track("three"), track("two")]

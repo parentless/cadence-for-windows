@@ -1,4 +1,7 @@
-use std::{sync::OnceLock, time::Duration};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use anyhow::{Result, bail, ensure};
 use futures::{FutureExt as _, StreamExt as _, future::BoxFuture};
@@ -19,6 +22,18 @@ pub(super) struct ImageHttpClient {
     client: reqwest::Client,
     user_agent: http::HeaderValue,
     runtime: tokio::runtime::Handle,
+    disk: Option<Arc<super::disk_cache::DiskCache>>,
+}
+
+/// Where downloaded artwork is kept between launches, shared with Settings so
+/// "Clear cache" can empty it.
+static DISK_CACHE: OnceLock<Arc<super::disk_cache::DiskCache>> = OnceLock::new();
+
+/// Deletes the on-disk artwork off the UI thread.
+pub(super) fn clear_disk_cache() {
+    if let Some(cache) = DISK_CACHE.get().cloned() {
+        std::thread::spawn(move || cache.clear());
+    }
 }
 
 impl ImageHttpClient {
@@ -42,10 +57,13 @@ impl ImageHttpClient {
                 .handle()
                 .clone()
         });
+        let disk = super::disk_cache::DiskCache::default_location()
+            .map(|cache| DISK_CACHE.get_or_init(|| Arc::new(cache)).clone());
         Ok(Self {
             client,
             user_agent,
             runtime,
+            disk,
         })
     }
 }
@@ -60,6 +78,10 @@ impl HttpClient for ImageHttpClient {
         request: http::Request<AsyncBody>,
     ) -> BoxFuture<'static, Result<Response<AsyncBody>>> {
         let (parts, body) = request.into_parts();
+        // Only plain GETs of images are cacheable.
+        let cache_key = (parts.method == http::Method::GET && matches!(body.0, Inner::Empty))
+            .then(|| parts.uri.to_string())
+            .zip(self.disk.clone());
         let mut request = self.client.request(parts.method, parts.uri.to_string());
         request = request.headers(parts.headers);
         request = match body.0 {
@@ -71,6 +93,16 @@ impl HttpClient for ImageHttpClient {
         };
         let runtime = self.runtime.clone();
         async move {
+            if let Some((url, disk)) = cache_key.clone() {
+                // The blocking pool reads the file; the UI thread never touches disk.
+                let mut lookup = AbortOnDrop(runtime.spawn_blocking(move || disk.load(&url)));
+                if let Ok(Some((bytes, mime))) = (&mut lookup.0).await {
+                    return Ok(http::Response::builder()
+                        .status(200)
+                        .header("content-type", mime)
+                        .body(bytes.into())?);
+                }
+            }
             let mut pending =
                 AbortOnDrop(runtime.spawn(async move { request.send().await?.error_for_status() }));
             let response = (&mut pending.0).await??;
@@ -97,6 +129,17 @@ impl HttpClient for ImageHttpClient {
                     "image response exceeds {MAX_IMAGE_DOWNLOAD_BYTES} byte limit"
                 );
                 body.extend_from_slice(&chunk);
+            }
+            if let Some((url, disk)) = cache_key
+                && status == http::StatusCode::OK
+                && let Some(content_type) = headers
+                    .get("content-type")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned)
+            {
+                let copy = body.clone();
+                // Fire and forget: a lost write only means one more download.
+                runtime.spawn_blocking(move || disk.store(&url, &content_type, &copy));
             }
             let mut response = http::Response::builder().status(status);
             *response

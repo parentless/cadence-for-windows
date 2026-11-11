@@ -250,6 +250,37 @@ impl LibraryFingerprint {
     }
 }
 
+impl LibraryFingerprint {
+    /// The fingerprint Spotify will report after this like or unlike, when it
+    /// can be known from what is held. `None` means a full reload is needed.
+    /// A wrong answer here can only cause a mismatch, which reloads safely;
+    /// it is persisted in the same transaction as the cache edit it describes.
+    fn after_like(&self, source_id: &str, liked: bool) -> Option<Self> {
+        let page = usize::try_from(crate::spotify::HEAD_PAGE_SIZE).unwrap_or(usize::MAX);
+        let in_head = self.liked_head.iter().any(|id| id == source_id);
+        let mut next = self.clone();
+        if liked {
+            // Re-liking something already near the top is ambiguous.
+            if in_head {
+                return None;
+            }
+            next.liked_head.insert(0, source_id.to_owned());
+            next.liked_head.truncate(page);
+            next.liked_total = self.liked_total.checked_add(1)?;
+        } else if in_head {
+            // Removal from the head needs the next item, unless the head is everything.
+            if self.liked_head.len() != usize::try_from(self.liked_total).ok()? {
+                return None;
+            }
+            next.liked_head.retain(|id| id != source_id);
+            next.liked_total = self.liked_total.checked_sub(1)?;
+        } else {
+            next.liked_total = self.liked_total.checked_sub(1)?;
+        }
+        Some(next)
+    }
+}
+
 type SharedFingerprint = Arc<std::sync::Mutex<Option<LibraryFingerprint>>>;
 
 fn commit_fingerprint(fingerprint: &SharedFingerprint, value: LibraryFingerprint) {
@@ -1347,19 +1378,37 @@ impl Worker {
                     "Spotify library update",
                     async move {
                         spotify.set_track_liked(&track.source_id, liked).await?;
-                        set_fingerprint(&fingerprint, None);
-                        if let Err(error) = store
+                        // Forget the fingerprint until the cache edit lands, then
+                        // restore the updated one so the next probe can still say
+                        // "unchanged" instead of re-walking the whole library.
+                        let previous = fingerprint.lock().expect("library fingerprint lock").take();
+                        let next = previous
+                            .as_ref()
+                            .and_then(|known| known.after_like(&track.source_id, liked));
+                        let persisted = next.clone();
+                        match store
                             .call(move |store| {
                                 if current_generation.load(Ordering::Acquire) == generation {
-                                    store.set_cached_track_liked(&track, liked)?;
+                                    store.set_cached_track_liked(
+                                        &track,
+                                        liked,
+                                        persisted.as_ref(),
+                                    )?;
+                                    return Ok(true);
                                 }
-                                Ok(())
+                                Ok(false)
                             })
                             .await
                         {
-                            log::warn!(
+                            Ok(true) => {
+                                if let Some(next) = next {
+                                    commit_fingerprint(&fingerprint, next);
+                                }
+                            }
+                            Ok(false) => {}
+                            Err(error) => log::warn!(
                                 "library: Spotify saved the change but cache update failed: {error:#}"
-                            );
+                            ),
                         }
                         Ok(())
                     },
@@ -3249,6 +3298,56 @@ mod tests {
     };
     use crate::model::{AlbumRef, ArtistRef, Provider, Track};
     use crate::storage::Store;
+
+    fn fingerprint(head: &[&str], total: u32) -> crate::model::LibraryFingerprint {
+        crate::model::LibraryFingerprint {
+            liked_head: head.iter().map(|id| (*id).to_owned()).collect(),
+            liked_total: total,
+            playlist_head: Vec::new(),
+            playlist_total: 0,
+        }
+    }
+
+    #[test]
+    fn liking_prepends_and_keeps_the_head_page_size() {
+        let full: Vec<String> = (0..50).map(|n| n.to_string()).collect();
+        let refs: Vec<&str> = full.iter().map(String::as_str).collect();
+        let next = fingerprint(&refs, 400).after_like("new", true).unwrap();
+        assert_eq!(next.liked_total, 401);
+        assert_eq!(next.liked_head.len(), 50);
+        assert_eq!(next.liked_head[0], "new");
+        assert_eq!(next.liked_head[49], "48");
+    }
+
+    #[test]
+    fn unliking_outside_the_head_only_lowers_the_total() {
+        let next = fingerprint(&["a", "b"], 400)
+            .after_like("far", false)
+            .unwrap();
+        assert_eq!(next, fingerprint(&["a", "b"], 399));
+    }
+
+    #[test]
+    fn unliking_inside_a_partial_head_needs_a_reload() {
+        assert!(
+            fingerprint(&["a", "b"], 400)
+                .after_like("a", false)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unliking_inside_a_complete_head_is_exact() {
+        let next = fingerprint(&["a", "b", "c"], 3)
+            .after_like("b", false)
+            .unwrap();
+        assert_eq!(next, fingerprint(&["a", "c"], 2));
+    }
+
+    #[test]
+    fn re_liking_something_already_in_the_head_needs_a_reload() {
+        assert!(fingerprint(&["a", "b"], 2).after_like("a", true).is_none());
+    }
 
     #[tokio::test]
     async fn abandoning_catalog_reply_cancels_the_request_future() {

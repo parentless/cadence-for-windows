@@ -51,9 +51,34 @@ pub(super) enum SettingsEvent {
     SetLastfm(crate::lastfm::Config),
 }
 
+/// Broad groups, so the page stays short without a tab for every setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsTab {
+    /// Appearance and playback.
+    General,
+    /// Spotify, Discord and Last.fm.
+    Connections,
+    /// Updates and cache.
+    System,
+}
+
+impl SettingsTab {
+    const ALL: [Self; 3] = [Self::General, Self::Connections, Self::System];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Connections => "Connections",
+            Self::System => "System",
+        }
+    }
+}
+
 /// The settings page: appearance, playback, and the Spotify developer app.
 pub(super) struct Settings {
     session: Entity<session::Session>,
+    tab: SettingsTab,
+    scroll: gpui_kit::ScrollHandle,
     mascot_select: Entity<SelectState<Vec<MascotOption>>>,
     /// Each switch is ringed while its focus is inside, in place of the kit's
     /// ring, which also shows after a click.
@@ -134,6 +159,8 @@ impl Settings {
         }
         Self {
             session: services::AppServices::session(cx),
+            tab: SettingsTab::General,
+            scroll: gpui_kit::ScrollHandle::new(),
             mascot_select,
             autoplay_focus: cx.focus_handle(),
             automatic_updates_focus: cx.focus_handle(),
@@ -182,18 +209,31 @@ impl Settings {
         let preferences = services::AppServices::preferences(cx);
         let autoplay = preferences.autoplay;
 
+        let tab = self.tab;
+        // The tab list stays put while the selected group scrolls beside it.
+        div()
+            .size_full()
+            .flex()
+            .justify_center()
+            // Balances the tab list so the content column stays centered.
+            .pr(tokens::SETTINGS_NAV_WIDTH)
+            .child(self.tab_list(palette, cx))
+            .child(
         div()
             .id("settings-page").test_support()
-            .size_full()
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .max_w(tokens::SETTINGS_MAX_WIDTH)
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .child(
                 div()
                     .w_full()
-                    .max_w(tokens::SETTINGS_MAX_WIDTH)
-                    .mx_auto()
-                    .px_10()
+                    .pr_10()
                     .pt_7()
                     .pb_16()
+                    .when(tab == SettingsTab::General, |content| content
                     .child(
                         div()
                             .child(Self::settings_section_header(
@@ -311,9 +351,10 @@ impl Settings {
                                     ),
                             ),
                     )
+                    )
+                    .when(tab == SettingsTab::Connections, |content| content
                     .child(
                         div()
-                            .mt_12()
                             .child(Self::settings_section_header(
                                 palette,
                                 "Spotify",
@@ -414,8 +455,58 @@ impl Settings {
                     )
                     .child(self.discord_section(palette, window, cx))
                     .child(self.lastfm_section(palette, window, cx))
-                    .child(self.updates_section(palette, window, cx))
-                    .child(self.cache_section(palette, cx)),
+                    )
+                    .when(tab == SettingsTab::System, |content| content
+                    .child(self.updates_section(palette, window, cx).mt_0())
+                    .child(self.cache_section(palette, cx))),
+            )
+            )
+    }
+
+    fn tab_list(&self, palette: CadencePalette, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_none()
+            .w(tokens::SETTINGS_NAV_WIDTH)
+            .pl_10()
+            .pt_7()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(
+                SettingsTab::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, tab)| {
+                        let selected = self.tab == tab;
+                        components::filled_button(palette, ("settings-tab", index))
+                            .test_support()
+                            .h_10()
+                            .w_full()
+                            .px_3()
+                            .justify_start()
+                            .rounded(tokens::CONTROL_RADIUS)
+                            .text_sm()
+                            .font_weight(if selected {
+                                gpui_kit::FontWeight::SEMIBOLD
+                            } else {
+                                gpui_kit::FontWeight::MEDIUM
+                            })
+                            .text_color(rgb(palette.text_primary))
+                            .when(selected, |button| button.bg(rgb(palette.selection)))
+                            .hover(|style| style.bg(rgb(palette.control_hover)))
+                            .child(tab.label())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.tab != tab {
+                                    this.tab = tab;
+                                    // Each group starts at its top.
+                                    this.scroll.set_offset(gpui_kit::point(
+                                        gpui_kit::px(0.),
+                                        gpui_kit::px(0.),
+                                    ));
+                                    cx.notify();
+                                }
+                            }))
+                    }),
             )
     }
 
@@ -589,6 +680,7 @@ impl Settings {
                             .child("Create a free Last.fm API account, then paste its key and shared secret. The secret stays in your system keychain."))
                         .child(h_flex().mt_3().gap_3()
                             .child(components::settings_button(palette, "settings-lastfm-connect", connect_label)
+                                .test_support()
                                 .on_click(cx.listener(|this, _, _, cx| this.lastfm_connect(cx))))
                             .child(components::settings_button(palette, "settings-lastfm-portal", "Create API account")
                                 .on_click(|_, _, cx| cx.open_url("https://www.last.fm/api/account/create"))))
@@ -762,14 +854,15 @@ impl Settings {
         let cache = services::AppServices::image_cache(cx);
         let (bytes, limit, reclaimed) = cache.read(cx).usage();
         let detail = if self.cache_cleared {
-            "Cache cleared. Visible artwork reloads as needed.".to_owned()
+            "Cache cleared in memory and on disk. Visible artwork reloads as needed.".to_owned()
         } else if reclaimed {
             "Older artwork has been cleared automatically to keep memory bounded.".to_owned()
         } else {
             format!(
-                "Artwork uses {:.1} MiB of {} MiB. Older images are removed automatically; manual cleanup is optional.",
+                "Artwork uses {:.1} MiB of {} MiB in memory, plus up to {} MiB saved on disk for faster launches. Older images are removed automatically; manual cleanup is optional.",
                 bytes as f64 / 1_048_576.,
-                limit / 1_048_576
+                limit / 1_048_576,
+                disk_cache::DEFAULT_CAP_BYTES / 1_048_576
             )
         };
         div()
@@ -777,7 +870,7 @@ impl Settings {
             .child(Self::settings_section_header(
                 palette,
                 "Cache",
-                "Artwork memory is managed automatically.",
+                "Artwork is managed automatically.",
             ))
             .child(
                 div()
@@ -798,6 +891,7 @@ impl Settings {
                             .test_support()
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cache.update(cx, |cache, cx| cache.clear(window, cx));
+                                http::clear_disk_cache();
                                 this.cache_cleared = true;
                                 cx.refresh_windows();
                             })),

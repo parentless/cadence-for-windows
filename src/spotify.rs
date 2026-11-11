@@ -35,7 +35,7 @@ const KEYCHAIN_ACCOUNT: &str = "oauth-token";
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const LOGGED_OUT_CREDENTIAL: &str = "cadence-logged-out";
 /// Spotify's page-size ceiling, used for the head probes.
-const HEAD_PAGE_SIZE: u32 = 50;
+pub(crate) const HEAD_PAGE_SIZE: u32 = 50;
 /// How many single-track lookups overlap: enough to fit a 30-track radio
 /// seed inside its timeout, small enough not to burst the rate limit.
 const RESOLVE_CONCURRENCY: usize = 4;
