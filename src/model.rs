@@ -209,7 +209,7 @@ pub struct HomePermissionMissing;
 
 impl std::fmt::Display for HomePermissionMissing {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Sign in again to let Cadence read your top artists and tracks")
+        f.write_str("Sign in again to let Sonder read your top artists and tracks")
     }
 }
 

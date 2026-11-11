@@ -134,7 +134,7 @@ fn check(cx: &mut App, install_if_available: bool) {
                 .build()?;
             runtime.block_on(async {
                 let client = reqwest::Client::builder()
-                    .user_agent("Cadence Windows updater")
+                    .user_agent("Sonder Windows updater")
                     .timeout(Duration::from_secs(180))
                     .build()?;
                 if let Some(release) = release {
@@ -201,9 +201,7 @@ async fn stage_update(client: &reqwest::Client, release: &Release) -> Result<()>
             .write(true)
             .create_new(true)
             .open(&staged)
-            .context(
-                "cannot write next to Cadence; move it to a writable folder before updating",
-            )?;
+            .context("cannot write next to Sonder; move it to a writable folder before updating")?;
         let mut response = client
             .get(&release.url)
             .send()

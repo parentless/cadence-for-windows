@@ -28,12 +28,12 @@ pub(crate) fn init() {
         log::error!("fatal panic: {panic}\n{}", Backtrace::force_capture());
         log::logger().flush();
         if std::thread::current().name() == Some("main") {
-            show_error(&format!("Cadence could not start:\n\n{panic}"));
+            show_error(&format!("Sonder could not start:\n\n{panic}"));
         }
         previous(panic);
     }));
     log::info!(
-        "startup: Cadence {} ({}) pid={} executable={:?}",
+        "startup: Sonder {} ({}) pid={} executable={:?}",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::ARCH,
         std::process::id(),
@@ -63,7 +63,7 @@ pub(crate) fn show_error(message: &str) {
                 MessageBoxW(
                     std::ptr::null_mut(),
                     message.as_ptr(),
-                    w!("Cadence startup error"),
+                    w!("Sonder startup error"),
                     MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
                 );
             }

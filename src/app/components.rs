@@ -1,4 +1,4 @@
-//! Shared building blocks for Cadence views.
+//! Shared building blocks for Sonder views.
 //!
 //! These are free functions rather than methods so that every view entity can
 //! reach them, and they take the palette by value so a view always draws with

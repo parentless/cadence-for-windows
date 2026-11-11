@@ -102,8 +102,8 @@ fn apply_dark_mode(dark_mode: bool, cx: &mut App) {
     });
 }
 
-/// Paints the component library's controls with Cadence's roles, so an input,
-/// switch or select sits in a Cadence view without its own palette.
+/// Paints the component library's controls with Sonder's roles, so an input,
+/// switch or select sits in a Sonder view without its own palette.
 fn apply_palette_to_theme_colors(palette: CadencePalette, colors: &mut ThemeColor) {
     colors.background = rgb(palette.canvas).into();
     colors.foreground = rgb(palette.text_primary).into();

@@ -2,10 +2,10 @@
 
 ## Vadivam audio-waveform icon
 
-The Cadence mark incorporates the `audio-waveform` icon from
+The Sonder mark incorporates the `audio-waveform` icon from
 [Vadivam](https://github.com/praveenjuge/vadivam), created by Praveen Juge.
 
-The source path was adapted in scale, color, and framing for Cadence.
+The source path was adapted in scale, color, and framing for Sonder.
 
 MIT License
 
@@ -45,7 +45,7 @@ Licensed under the
 ## GPUI Windows portability patch
 
 The vendored `gpui-pre-windows` 0.3.7 backend is from the Zed project and the
-gpui-pre distribution, licensed under Apache License 2.0. Cadence changes debug
+gpui-pre distribution, licensed under Apache License 2.0. Sonder changes debug
 shader loading to use embedded source instead of the build machine's files.
 Optimized builds keep the original precompiled shader path. The complete
 license is in `vendor/gpui-pre-windows/LICENSE-APACHE` in source distributions
@@ -53,6 +53,6 @@ and `GPUI-WINDOWS-LICENSE.txt` in Windows binary ZIPs.
 
 ## Inter fonts
 
-Cadence embeds Inter 3.19 by Rasmus Andersson under the SIL Open Font License
+Sonder embeds Inter 3.19 by Rasmus Andersson under the SIL Open Font License
 1.1. The full copyright and license notice is in `assets/fonts/LICENSE.txt`
 in source distributions and `INTER-LICENSE.txt` in Windows binary ZIPs.

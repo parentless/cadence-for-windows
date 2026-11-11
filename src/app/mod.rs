@@ -68,7 +68,7 @@ actions!(
 );
 
 /// The key context of the main window.
-const WORKSPACE_KEY_CONTEXT: &str = "Cadence";
+const WORKSPACE_KEY_CONTEXT: &str = "Sonder";
 /// The key context of the onboarding window.
 const ONBOARDING_KEY_CONTEXT: &str = "Onboarding";
 /// The key context of the focused progress slider.
@@ -80,7 +80,7 @@ const CONTROL_KEY_CONTEXT: &str = "Control";
 const INPUT_KEY_CONTEXT: &str = "Input";
 
 /// What the listener sees when a command cannot reach the backend.
-const BACKEND_UNAVAILABLE: &str = "Cadence backend is busy or not running";
+const BACKEND_UNAVAILABLE: &str = "Sonder backend is busy or not running";
 
 /// Dims everything behind a dialog that must be answered, in either appearance.
 const BLOCKING_SCRIM: gpui_kit::Hsla = gpui_kit::Hsla {
@@ -302,7 +302,7 @@ enum ConnectionState {
     SetupRequired,
     AuthorizationRequired,
     Connecting,
-    /// Signed in with a free account, which cannot stream through Cadence.
+    /// Signed in with a free account, which cannot stream through Sonder.
     PremiumRequired,
     Ready,
 }

@@ -44,7 +44,7 @@ impl InstanceLifecycle {
 
     pub fn acquire() -> Result<Instance> {
         let project_dirs = ProjectDirs::from("dev", "twoducks", "cadence")
-            .context("could not determine the Cadence cache directory")?;
+            .context("could not determine the Sonder cache directory")?;
         Self::acquire_at(project_dirs.cache_dir().join("activation.sock"))
     }
 

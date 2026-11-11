@@ -245,7 +245,7 @@ impl Settings {
                             .child(Self::settings_section_header(
                                 palette,
                                 "Appearance",
-                                "Choose how Cadence looks.",
+                                "Choose how Sonder looks.",
                             ))
                             .child(
                                 div()
@@ -364,7 +364,7 @@ impl Settings {
                                             .child(Self::playback_setting_row(
                                                 palette,
                                                 "Normalize volume",
-                                                "Keep songs at a similar loudness. Takes effect the next time playback connects, such as after restarting Cadence.",
+                                                "Keep songs at a similar loudness. Takes effect the next time playback connects, such as after restarting Sonder.",
                                                 components::focus_ring_around(
                                                     palette,
                                                     &self.normalise_focus,
@@ -395,7 +395,7 @@ impl Settings {
                                                 .child(Self::playback_setting_row(
                                                     palette,
                                                     "Keep running in the tray",
-                                                    "Closing the window keeps the music playing. Click the tray icon to bring Cadence back.",
+                                                    "Closing the window keeps the music playing. Click the tray icon to bring Sonder back.",
                                                     components::focus_ring_around(
                                                         palette,
                                                         &self.tray_focus,
@@ -426,7 +426,7 @@ impl Settings {
                             .child(Self::settings_section_header(
                                 palette,
                                 "Spotify",
-                                "Manage the developer app Cadence uses to connect to Spotify.",
+                                "Manage the developer app Sonder uses to connect to Spotify.",
                             ))
                             .child(
                                 div()
@@ -515,7 +515,7 @@ impl Settings {
                                                 .line_height(relative(1.45))
                                                 .text_color(rgb(palette.text))
                                                 .child(
-                                                    "Quit Cadence and update the environment variable to change the developer app.",
+                                                    "Quit Sonder and update the environment variable to change the developer app.",
                                                 ),
                                         )
                                     }),
@@ -665,7 +665,7 @@ impl Settings {
                         Ok(Ok(start)) => {
                             this.lastfm_token = Some(start.token);
                             this.lastfm_status = Some(
-                                "Approve Cadence in your browser, then press Finish connecting."
+                                "Approve Sonder in your browser, then press Finish connecting."
                                     .into(),
                             );
                             cx.open_url(&start.url);
@@ -782,7 +782,7 @@ impl Settings {
                                 this.save_discord(enabled, cx);
                             }))))
                     .child(div().mt_2().text_size(tokens::CAPTION_TEXT).text_color(rgb(palette.text_muted))
-                        .child("Create a Discord application named Cadence and paste its public Application ID. No bot token needed."))
+                        .child("Create a Discord application named Sonder and paste its public Application ID. No bot token needed."))
                     .child(components::settings_button(palette, "settings-discord-portal", "Open Discord Developer Portal")
                         .mt_3().on_click(|_, _, cx| cx.open_url("https://discord.com/developers/applications")))
                     .when_some(self.discord_error.clone(), |card, error| card.child(div().mt_2().text_sm().text_color(rgb(palette.text)).child(error)))))
@@ -853,12 +853,12 @@ impl Settings {
             Some(UpdateCheck::Checking) => ("Checking for updates…".to_owned(), false),
             #[cfg(target_os = "windows")]
             Some(UpdateCheck::Downloading) => (
-                "Downloading and verifying the update. Cadence will restart when ready.".to_owned(),
+                "Downloading and verifying the update. Sonder will restart when ready.".to_owned(),
                 false,
             ),
             Some(UpdateCheck::UpToDate) => ("Up to date.".to_owned(), false),
             Some(UpdateCheck::Available(version)) => {
-                (format!("Cadence {version} is ready to install."), true)
+                (format!("Sonder {version} is ready to install."), true)
             }
             #[cfg(target_os = "windows")]
             Some(UpdateCheck::Failed(error)) => (format!("Update failed: {error}"), false),

@@ -45,7 +45,7 @@ impl InstanceLifecycle {
 
     pub fn acquire() -> Result<Instance> {
         let dirs = ProjectDirs::from("dev", "twoducks", "cadence")
-            .context("could not determine the Cadence cache directory")?;
+            .context("could not determine the Sonder cache directory")?;
         Self::acquire_at(dirs.cache_dir().join("activation.lock"))
     }
 
@@ -70,7 +70,7 @@ impl InstanceLifecycle {
                         return Ok(Instance::Secondary);
                     }
                     if Instant::now() >= deadline {
-                        bail!("Cadence is running but its activation endpoint did not respond");
+                        bail!("Sonder is running but its activation endpoint did not respond");
                     }
                     thread::sleep(Duration::from_millis(25));
                 }

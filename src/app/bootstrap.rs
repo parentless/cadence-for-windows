@@ -71,7 +71,7 @@ pub(super) fn run() {
 fn menus(updates_available: bool) -> Vec<gpui_kit::Menu> {
     vec![
         gpui_kit::Menu {
-            name: "Cadence".into(),
+            name: "Sonder".into(),
             items: app_menu_items(updates_available),
             disabled: false,
         },
@@ -98,7 +98,7 @@ fn app_menu_items(updates_available: bool) -> Vec<gpui_kit::MenuItem> {
         ));
         items.push(gpui_kit::MenuItem::separator());
     }
-    items.push(gpui_kit::MenuItem::action("Quit Cadence", Quit));
+    items.push(gpui_kit::MenuItem::action("Quit Sonder", Quit));
     items
 }
 
@@ -127,7 +127,7 @@ fn stored_credentials_expected(store: &Store) -> bool {
             .unwrap_or(true)
 }
 
-/// Brings Cadence forward when another launch asks this instance to show
+/// Brings Sonder forward when another launch asks this instance to show
 /// itself, opening a window again if the last one was closed.
 fn watch_for_activations(cx: &mut App) {
     let activations = services::AppServices::activations(cx);

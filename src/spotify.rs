@@ -535,7 +535,7 @@ impl Spotify {
                 .map_err(|_| anyhow!("could not lock Spotify token state"))?
                 .as_ref().is_some_and(|token| token.scopes.contains("user-library-modify"));
             if !authorized {
-                bail!("To change Spotify Liked Songs, sign out of Cadence and sign in again to grant library editing permission");
+                bail!("To change Spotify Liked Songs, sign out of Sonder and sign in again to grant library editing permission");
             }
             if liked {
                 self.client.library_add([LibraryId::Track(id)]).await?;

@@ -30,5 +30,5 @@ cp "$source" "$iconset/icon_512x512@2x.png"
 
 iconutil -c icns "$iconset" -o "$root/assets/AppIcon.icns"
 
-sips -s format png -z 64 64 "$root/assets/cadence-mark.svg" \
-  --out "$root/assets/cadence-mark.png" >/dev/null
+sips -s format png -z 64 64 "$root/assets/sonder-mark.svg" \
+  --out "$root/assets/sonder-mark.png" >/dev/null

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/cadence-mark.svg" width="96" height="96" alt="Cadence logo">
+  <img src="assets/sonder-mark.svg" width="96" height="96" alt="Sonder logo">
 </p>
 
-<h1 align="center">Cadence</h1>
+<h1 align="center">Sonder</h1>
 
 <p align="center">
   A minimal Spotify player for macOS and Windows.<br>
@@ -13,7 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black.svg" alt="MIT license"></a>
 </p>
 
-![Cadence showing glaive’s artist profile](assets/glaive-profile.webp)
+![Sonder showing glaive’s artist profile](assets/glaive-profile.webp)
 
 Artist-page preview using public [glaive](https://open.spotify.com/artist/4cJKDGSv4Dz9QycXYmo565) metadata and artwork from Spotify.
 
@@ -31,9 +31,9 @@ ID are required; the app guides you through setup.
 
 Windows release builds check this repository's public GitHub releases in the
 background after launch and once daily. **Settings → Updates → Install update**
-downloads and verifies the new executable, then restarts Cadence to replace it.
-Automatic checks can be disabled. Keep Cadence in a writable directory such as
-`%LOCALAPPDATA%\Programs\Cadence`. Debug builds do not self-update.
+downloads and verifies the new executable, then restarts Sonder to replace it.
+Automatic checks can be disabled. Keep Sonder in a writable directory such as
+`%LOCALAPPDATA%\Programs\Sonder`. Debug builds do not self-update.
 
 Every push to `main` builds an optimized EXE/ZIP in Actions. Bumping `version`
 in `Cargo.toml` and its `Cargo.lock` package entry publishes a new stable
@@ -69,7 +69,7 @@ needed. See [Windows setup](docs/WINDOWS.md) and [releasing](docs/RELEASING.md).
 
 ## Reported memory use
 
-![User-reported Windows RAM ranges: Cadence 50–70 MB, Spotify 400–700 MB; not a controlled benchmark](assets/memory-comparison.png)
+![User-reported Windows RAM ranges: Sonder 50–70 MB, Spotify 400–700 MB; not a controlled benchmark](assets/memory-comparison.png)
 
 These are user-reported example ranges, not an independent benchmark. Actual
 usage depends on workload, cache state, and process accounting. See
@@ -91,28 +91,28 @@ this fork preserves the Rust, GPUI, librespot, and CPAL architecture.
 ### macOS
 
 1. Download the latest DMG from [Releases](https://github.com/infomiho/cadence/releases/latest).
-2. Open the DMG and drag Cadence into Applications.
-3. Launch Cadence from Applications and follow the Spotify setup below.
+2. Open the DMG and drag Sonder into Applications.
+3. Launch Sonder from Applications and follow the Spotify setup below.
 
 Release downloads are signed with Developer ID and notarized by Apple.
 
 ## Set Up Spotify
 
-Cadence requires Spotify Premium. On first launch, Cadence guides you
+Sonder requires Spotify Premium. On first launch, Sonder guides you
 through creating a Spotify developer app and entering its Client ID. Client IDs
-are public; Cadence never needs your client secret.
+are public; Sonder never needs your client secret.
 
 1. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
 2. Add `http://127.0.0.1:8888/callback` as a redirect URI.
-3. Copy the Client ID from **Basic Information** and enter it in Cadence.
+3. Copy the Client ID from **Basic Information** and enter it in Sonder.
 
-Cadence stores the Client ID in app preferences and keeps login and playback
+Sonder stores the Client ID in app preferences and keeps login and playback
 tokens in macOS Keychain or Windows Credential Manager.
 
 ## Run From Source
 
 On Windows, follow the [MSVC and Windows SDK build instructions](docs/WINDOWS.md).
-On macOS, building Cadence requires Rust and Apple's Metal Toolchain. Developers can skip
+On macOS, building Sonder requires Rust and Apple's Metal Toolchain. Developers can skip
 the setup screen by setting `SPOTIFY_CLIENT_ID` at launch:
 
 ```sh

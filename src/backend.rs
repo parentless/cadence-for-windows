@@ -472,7 +472,7 @@ pub enum BackendEvent {
         error: String,
     },
     PlaybackFailed(String),
-    /// The account is on the free plan, which cannot stream through Cadence.
+    /// The account is on the free plan, which cannot stream through Sonder.
     PremiumRequired,
     TrackFailed {
         spotify_uri: String,
@@ -746,7 +746,7 @@ impl Backend {
                     let _ = acknowledged.send(());
                 }
             })
-            .expect("could not start the Cadence backend");
+            .expect("could not start the Sonder backend");
         (
             Senders {
                 commands,
@@ -1466,7 +1466,7 @@ impl Worker {
         self.catalog_generation.store(generation, Ordering::Release);
         if self.configuration_is_from_environment() {
             let _ = self.events.send(BackendEvent::SpotifyConfigurationResetFailed(
-                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Cadence".to_owned(),
+                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Sonder".to_owned(),
             )).await;
             return Ok(());
         }
@@ -1511,7 +1511,7 @@ impl Worker {
         if self.configuration_is_from_environment() {
             self.send_configuration_failed(
                 generation,
-                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Cadence",
+                "SPOTIFY_CLIENT_ID is configured by the environment and cannot be changed in Sonder",
             ).await;
             return Ok(());
         }

@@ -1,7 +1,7 @@
 # Memory comparison
 
 The README chart illustrates user-reported Windows RAM usage: **50–70 MB for
-Cadence** and **400–700 MB for Spotify**. These are informal observations, not an
+Sonder** and **400–700 MB for Spotify**. These are informal observations, not an
 independently measured or controlled benchmark. Workload, app versions, warm-up,
 cache state, and whether all Spotify processes were included were not verified.
 The chart makes no CPU, GPU, energy, or latency claim.

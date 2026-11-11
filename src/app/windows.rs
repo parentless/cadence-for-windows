@@ -69,7 +69,7 @@ pub(super) fn open_initial_window(credentials_expected: bool, cx: &mut App) {
     }
 }
 
-/// Brings Cadence forward: activates an open window (sign-in first, since it
+/// Brings Sonder forward: activates an open window (sign-in first, since it
 /// is the one asking something of the listener), or opens whichever window
 /// the current state calls for.
 pub(super) fn show_app_window(cx: &mut App) {
@@ -105,7 +105,7 @@ pub(super) fn open_main_window(cx: &mut App) {
             window_min_size: Some(size(px(720.), px(600.))),
             is_resizable: true,
             titlebar: Some(gpui_kit::TitlebarOptions {
-                title: Some("Cadence".into()),
+                title: Some("Sonder".into()),
                 appears_transparent: cfg!(target_os = "macos"),
                 traffic_light_position: Some(traffic_light_position(Theme::global(cx).font_size)),
             }),
@@ -125,10 +125,10 @@ pub(super) fn open_main_window(cx: &mut App) {
     match opened {
         Ok((handle, _)) => services::AppServices::set_main_window(Some(handle), cx),
         Err(error) => {
-            log::error!("could not open the Cadence window: {error:#}");
+            log::error!("could not open the Sonder window: {error:#}");
             #[cfg(target_os = "windows")]
             crate::diagnostics::show_error(&format!(
-                "Could not open the Cadence window:\n{error:#}"
+                "Could not open the Sonder window:\n{error:#}"
             ));
         }
     }
@@ -148,7 +148,7 @@ pub(super) fn ensure_onboarding_window(cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             is_resizable: false,
             titlebar: Some(gpui_kit::TitlebarOptions {
-                title: Some("Cadence".into()),
+                title: Some("Sonder".into()),
                 appears_transparent: cfg!(target_os = "macos"),
                 traffic_light_position: Some(traffic_light_position(Theme::global(cx).font_size)),
             }),

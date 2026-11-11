@@ -613,7 +613,7 @@ impl Sidebar {
                     .size(BRAND_LOGO_SIZE)
                     .flex_none(),
             )
-            .child(div().whitespace_nowrap().child("Cadence").with_animation(
+            .child(div().whitespace_nowrap().child("Sonder").with_animation(
                 ("sidebar-brand-label", animation_id),
                 row_animation.clone(),
                 move |label, delta| {

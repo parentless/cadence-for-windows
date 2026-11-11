@@ -43,7 +43,7 @@ checksums, and checksum mismatches are rejected. Metadata is capped at 1 MiB,
 checksum text at 1 KiB, and executable downloads at 300 MiB.
 
 After verification, a short-lived PowerShell helper waits for normal shutdown,
-keeps a rollback executable while replacing it, restarts Cadence, and cleans
+keeps a rollback executable while replacing it, restarts Sonder, and cleans
 up. Installation needs a writable app folder. A system policy that disables
 PowerShell can prevent installation; a portable ZIP remains available.
 

@@ -37,7 +37,7 @@ pub(super) fn track(index: usize) -> model::Track {
         spotify_uri: Some(format!("spotify:track:track-{index}")),
         isrc: None,
         title: format!("Song {}", index + 1).into(),
-        artist: "Cadence Ensemble".into(),
+        artist: "Sonder Ensemble".into(),
         artists: Vec::new(),
         album: "An afternoon in September".into(),
         album_ref: None,
@@ -157,7 +157,7 @@ pub(super) fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle) {
     }
 }
 
-/// More Tab stops than any Cadence window has, so a Tab walk that runs past it
+/// More Tab stops than any Sonder window has, so a Tab walk that runs past it
 /// has missed its target.
 const MAX_TAB_STOPS: usize = 64;
 

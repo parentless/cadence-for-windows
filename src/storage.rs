@@ -98,7 +98,7 @@ pub struct AppPreferences {
     pub autoplay: bool,
     /// Evens out loudness between songs. Off unless the listener turns it on.
     pub normalise_volume: bool,
-    /// Closing the window keeps Cadence running from the tray (Windows).
+    /// Closing the window keeps Sonder running from the tray (Windows).
     pub keep_in_tray: bool,
     pub mascot: MascotPreference,
 }
@@ -133,14 +133,14 @@ pub struct Store {
 impl Store {
     pub fn open_default() -> Result<Self> {
         let project = ProjectDirs::from("dev", "twoducks", "cadence")
-            .context("could not resolve the Cadence data directory")?;
+            .context("could not resolve the Sonder data directory")?;
         std::fs::create_dir_all(project.data_dir())
-            .context("could not create the Cadence data directory")?;
+            .context("could not create the Sonder data directory")?;
         Self::open(project.data_dir().join("cadence.sqlite3"))
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let connection = Connection::open(path).context("could not open the Cadence database")?;
+        let connection = Connection::open(path).context("could not open the Sonder database")?;
         connection.busy_timeout(Duration::from_secs(2))?;
         let store = Self { connection };
         store.migrate()?;
@@ -164,7 +164,7 @@ impl Store {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version > 7 {
-            anyhow::bail!("database schema version {version} is newer than this Cadence build");
+            anyhow::bail!("database schema version {version} is newer than this Sonder build");
         }
         if version < 4 {
             self.migrate_to_4(version)?;

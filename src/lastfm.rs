@@ -406,7 +406,7 @@ impl std::fmt::Display for CallError {
 fn api_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .use_rustls_tls()
-        .user_agent("Cadence")
+        .user_agent("Sonder")
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(15))
         .build()
@@ -568,7 +568,7 @@ fn friendly(error: CallError) -> anyhow::Error {
         CallError::Api { code: 10, .. } => anyhow!("Last.fm rejected that API key"),
         CallError::Api { code: 13, .. } => anyhow!("Last.fm rejected the shared secret"),
         CallError::Api { code: 14, .. } => {
-            anyhow!("Approve Cadence on the Last.fm page first, then try again")
+            anyhow!("Approve Sonder on the Last.fm page first, then try again")
         }
         CallError::Api { code: 15, .. } | CallError::Api { code: 4, .. } => {
             anyhow!("That sign-in link expired. Press Connect again")

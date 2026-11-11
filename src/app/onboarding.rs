@@ -14,7 +14,7 @@ pub(super) enum OnboardingEvent {
     ClearError,
 }
 
-/// The screens shown before Cadence has a usable Spotify session: setup,
+/// The screens shown before Sonder has a usable Spotify session: setup,
 /// sign-in, and the backend failure notice.
 pub(super) struct Onboarding {
     session: Entity<session::Session>,
@@ -145,7 +145,7 @@ impl Onboarding {
                         .text_2xl()
                         .font_weight(gpui_kit::FontWeight::BOLD)
                         .text_color(rgb(palette.text_primary))
-                        .child("Cadence could not start"),
+                        .child("Sonder could not start"),
                 )
                 .child(
                     div()
@@ -200,9 +200,9 @@ impl Onboarding {
                         .text_color(rgb(palette.text_muted))
                         .child(match name {
                             Some(name) => format!(
-                                "{name} is on the free plan. Cadence plays music through Spotify's streaming service, which only works with Premium."
+                                "{name} is on the free plan. Sonder plays music through Spotify's streaming service, which only works with Premium."
                             ),
-                            None => "This account is on the free plan. Cadence plays music through Spotify's streaming service, which only works with Premium.".to_owned(),
+                            None => "This account is on the free plan. Sonder plays music through Spotify's streaming service, which only works with Premium.".to_owned(),
                         }),
                 )
                 .child(
@@ -258,7 +258,7 @@ impl Onboarding {
                             .text_lg()
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .text_color(rgb(palette.text_primary))
-                            .child("Cadence"),
+                            .child("Sonder"),
                     ),
             )
             .child(
@@ -268,7 +268,7 @@ impl Onboarding {
                     .line_height(relative(1.12))
                     .font_weight(gpui_kit::FontWeight::BOLD)
                     .text_color(rgb(palette.text_primary))
-                    .child("Your Spotify,\nin Cadence"),
+                    .child("Your Spotify,\nin Sonder"),
             )
             .child(
                 div()
@@ -277,7 +277,7 @@ impl Onboarding {
                     .line_height(relative(1.55))
                     .text_color(rgb(palette.text_muted))
                     .child(
-                        "Use a Spotify developer app you control. Cadence stores only its public Client ID.",
+                        "Use a Spotify developer app you control. Sonder stores only its public Client ID.",
                     ),
             )
             .when(show_configuration, |rail| {
@@ -314,7 +314,7 @@ impl Onboarding {
                 div()
                     .text_size(tokens::CAPTION_TEXT)
                     .text_color(rgb(palette.text_muted))
-                    .child("Saved in Cadence"),
+                    .child("Saved in Sonder"),
             )
             .child(
                 div()
@@ -361,7 +361,7 @@ impl Onboarding {
                             .text_size(tokens::CAPTION_TEXT)
                             .line_height(relative(1.4))
                             .text_color(rgb(palette.text_muted))
-                            .child("Change SPOTIFY_CLIENT_ID outside Cadence."),
+                            .child("Change SPOTIFY_CLIENT_ID outside Sonder."),
                     )
                 },
             )
@@ -579,7 +579,7 @@ impl Onboarding {
             .justify_center()
             .child(Self::onboarding_task_header(palette,
                 "Log in to Spotify",
-                "Spotify will ask you to approve Cadence twice: first for your library, then for playback.",
+                "Spotify will ask you to approve Sonder twice: first for your library, then for playback.",
             ))
             .when(!configuration_blocked, |form| {
                 form.child(div().mt_8().flex().justify_start().child(if connecting {

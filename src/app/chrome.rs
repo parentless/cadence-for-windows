@@ -683,7 +683,7 @@ impl Render for Toolbar {
 }
 
 /// Asks before throwing away the saved Spotify developer app, which cannot be
-/// undone from inside Cadence.
+/// undone from inside Sonder.
 pub(super) fn spotify_app_change_confirmation(
     palette: CadencePalette,
     signed_in: bool,
@@ -691,9 +691,9 @@ pub(super) fn spotify_app_change_confirmation(
     confirm: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
     let consequence = if signed_in {
-        "This signs you out, removes the saved Client ID, and restarts Spotify setup. Your Cadence favorites and settings stay."
+        "This signs you out, removes the saved Client ID, and restarts Spotify setup. Your Sonder favorites and settings stay."
     } else {
-        "This removes the saved Client ID and restarts Spotify setup. Your Cadence favorites and settings stay."
+        "This removes the saved Client ID and restarts Spotify setup. Your Sonder favorites and settings stay."
     };
     div()
         .absolute()

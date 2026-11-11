@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $backup = "$Executable.previous"
 try {
     $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if ($process -and -not $process.WaitForExit(60000)) { throw 'Cadence did not exit within 60 seconds.' }
+    if ($process -and -not $process.WaitForExit(60000)) { throw 'Sonder did not exit within 60 seconds.' }
     # Antivirus can hold an image briefly after exit.
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
         try {
@@ -27,7 +27,7 @@ try {
     Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
 } catch {
     Add-Type -AssemblyName PresentationFramework
-    [System.Windows.MessageBox]::Show("Cadence could not install the update: $($_.Exception.Message)", 'Cadence update') | Out-Null
+    [System.Windows.MessageBox]::Show("Sonder could not install the update: $($_.Exception.Message)", 'Sonder update') | Out-Null
     if (Test-Path -LiteralPath $Executable) { Start-Process -FilePath $Executable }
 } finally {
     Remove-Item -LiteralPath $Staged -Force -ErrorAction SilentlyContinue

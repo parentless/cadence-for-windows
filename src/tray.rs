@@ -1,4 +1,4 @@
-//! A notification-area (tray) icon so Cadence can keep playing with no window.
+//! A notification-area (tray) icon so Sonder can keep playing with no window.
 //!
 //! The icon owns one thread that sleeps inside `GetMessageW`, so it costs no
 //! CPU until the listener clicks it. Clicks become [`TrayCommand`]s on a
@@ -42,7 +42,7 @@ const CALLBACK_MESSAGE: u32 = WM_APP + 1;
 const ICON_ID: u32 = 1;
 const CLASS_NAME: PCWSTR = w!("CadenceTrayWindow");
 const MENU_ITEMS: [(usize, PCWSTR, TrayCommand); 4] = [
-    (1, w!("Show Cadence"), TrayCommand::Show),
+    (1, w!("Show Sonder"), TrayCommand::Show),
     (2, w!("Play / Pause"), TrayCommand::Toggle),
     (3, w!("Next"), TrayCommand::Next),
     (4, w!("Previous"), TrayCommand::Previous),
@@ -122,7 +122,7 @@ fn run(commands: async_channel::Sender<TrayCommand>, ready: mpsc::Sender<io::Res
         let window = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             CLASS_NAME,
-            w!("Cadence"),
+            w!("Sonder"),
             WS_POPUP,
             0,
             0,
@@ -178,7 +178,7 @@ unsafe fn add_icon(window: HWND) -> bool {
             GetSystemMetrics(SM_CYSMICON),
             LR_SHARED,
         ) as _;
-        for (slot, unit) in data.szTip.iter_mut().zip("Cadence".encode_utf16()) {
+        for (slot, unit) in data.szTip.iter_mut().zip("Sonder".encode_utf16()) {
             *slot = unit;
         }
         Shell_NotifyIconW(NIM_ADD, &data) != 0
@@ -205,7 +205,7 @@ unsafe fn show_menu(window: HWND) {
             AppendMenuW(menu, MF_STRING, id, label);
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-        AppendMenuW(menu, MF_STRING, QUIT_ITEM, w!("Quit Cadence"));
+        AppendMenuW(menu, MF_STRING, QUIT_ITEM, w!("Quit Sonder"));
         let mut cursor = POINT { x: 0, y: 0 };
         GetCursorPos(&mut cursor);
         // Without this the menu would not close when the listener clicks away.

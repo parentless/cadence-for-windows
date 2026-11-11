@@ -269,7 +269,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     services::AppServices::image_cache(cx).update(cx, |cache, _| cache.seed_artist_fixture(url, Arc::new(gpui_kit::RenderImage::new([image::Frame::new(pixels)]))));
                     workspace.open_album(model::AlbumRef { name: "Blue hours".into(), source_id: Some("blue-album".into()), artwork_url: Some(url.into()), ..Default::default() }, Route::LikedSongs, cx);
                     let BackendCommand::LoadAlbum { respond, .. } = backend.commands.try_recv().unwrap() else { panic!() };
-                    respond.send(Ok((model::Album { provider: model::Provider::Spotify, source_id: "blue-album".into(), spotify_uri: None, name: "Blue hours".into(), artists: vec![model::ArtistRef { name: "Cadence Ensemble".into(), source_id: Some("ensemble".into()), spotify_uri: None }], release_date: Some("2026-01-01".into()), artwork_url: Some(url.into()), track_count: Some(30) }, (0..30).map(track).collect()))).unwrap();
+                    respond.send(Ok((model::Album { provider: model::Provider::Spotify, source_id: "blue-album".into(), spotify_uri: None, name: "Blue hours".into(), artists: vec![model::ArtistRef { name: "Sonder Ensemble".into(), source_id: Some("ensemble".into()), spotify_uri: None }], release_date: Some("2026-01-01".into()), artwork_url: Some(url.into()), track_count: Some(30) }, (0..30).map(track).collect()))).unwrap();
                 }
                 Scene::ReadmeGlaive | Scene::ReadmeGlaiveDocked => {
                     let path = std::env::var("CADENCE_README_FIXTURE").expect("README fixture path");
@@ -314,7 +314,7 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     let playlists: Vec<_> = (0..200).map(|index| model::Playlist {
                         provider: model::Provider::Spotify, source_id: format!("fixture-playlist-{index}"),
                         name: if index == 0 { "A playlist with an especially long title that must stay within the sidebar".into() } else { format!("Playlist {}", index + 1).into() },
-                        owner: "Cadence Ensemble".into(), track_count: 1000, artwork_url: (index % 2 == 0).then(|| artwork_url.into()),
+                        owner: "Sonder Ensemble".into(), track_count: 1000, artwork_url: (index % 2 == 0).then(|| artwork_url.into()),
                     }).collect();
                     let selected = playlists[0].clone();
                     let pins = if matches!(scene, Scene::PinnedPlaylist) { vec![playlists[1].clone(), playlists[3].clone()] } else { vec![] };

@@ -1,4 +1,4 @@
-# Cadence for Windows
+# Sonder for Windows
 
 This port keeps Rust, GPUI's GPU renderer, librespot, CPAL's native audio
 backend, SQLite, the bounded image cache, resampling, and the existing playback
@@ -40,7 +40,7 @@ Outputs are under `dist/`. Successful packaging removes superseded Windows
 packages and staging folders, keeping only the newly generated EXE, ZIP and
 checksums. An optional `-Label artist-profile` adds a descriptive build suffix.
 Extract the zip to a writable folder such as
-`$env:LOCALAPPDATA\Programs\Cadence` and run `Cadence.exe`.
+`$env:LOCALAPPDATA\Programs\Sonder` and run `Cadence.exe`.
 
 ## GitHub Actions build
 
@@ -65,7 +65,7 @@ Windows SDK's `fxc.exe` on the Windows runner.
 A Spotify Premium account is required. Follow the app's setup screen to create
 your own Spotify developer app and register
 `http://127.0.0.1:8888/callback`. Enter the public Client ID; no client secret is
-needed. Authorization opens in your default browser. Allow Cadence's local
+needed. Authorization opens in your default browser. Allow Sonder's local
 loopback callback if Windows asks.
 
 Optionally skip entering the Client ID during development:
@@ -94,7 +94,7 @@ update files.
   The account menu is opaque. On artist pages the toolbar floats over the backdrop.
 - Right-click any track row to open its actions menu. Track lists share the
   same play, favorite, navigation and context-menu behavior without trailing dots.
-- Closing the last window exits Cadence and stops playback/background services.
+- Closing the last window exits Sonder and stops playback/background services.
   Ctrl+Q also exits; minimizing keeps music and system media keys running.
 - The sign-in window stays above the player when reauthentication is required.
 - Now Playing metadata, cover art, media buttons, and position updates use
@@ -121,7 +121,7 @@ on a stable `vMAJOR.MINOR.PATCH` GitHub release. The updater compares versions
 numerically, checks once a day when enabled, and installs only after the user
 chooses **Install update** in Settings. Downloads and SHA-256 verification run
 off the UI/audio threads. After normal shutdown, a PowerShell helper replaces
-the executable, keeps a rollback copy during replacement, and restarts Cadence.
+the executable, keeps a rollback copy during replacement, and restarts Sonder.
 Installation requires a writable application folder. Corporate policies that
 block PowerShell can prevent in-place installation; downloading the release
 zip and replacing the executable manually remains available.
@@ -163,17 +163,17 @@ builds retain precompiled shaders.
 ## Discord Rich Presence
 
 1. Open **Settings → Discord → Open Discord Developer Portal**.
-2. Create an application named **Cadence**, then copy its **Application ID**
+2. Create an application named **Sonder**, then copy its **Application ID**
    from General Information. This is public; no bot token or client secret is needed.
 3. Paste it into the **Discord Application ID** field, click **Save**, and enable
    **Share listening activity**.
 4. Keep the Discord desktop application running with activity sharing enabled,
-   then play a track in Cadence.
+   then play a track in Sonder.
 
 Your profile shows a Listening activity with track/artist details, album art
 when available, progress timestamps, and an Open in Spotify button. The activity
-clears when paused, signed out, disabled, or Cadence exits. Browser-only Discord
-cannot receive local IPC. This is Cadence Rich Presence, rather than Spotify's
+clears when paused, signed out, disabled, or Sonder exits. Browser-only Discord
+cannot receive local IPC. This is Sonder Rich Presence, rather than Spotify's
 native account connection or Listen Along feature.
 
 Sharing defaults to off. When disabled it creates no IPC connection or worker.
@@ -210,7 +210,7 @@ files (current and previous). This bounds log disk usage without a restart.
 
 Right-click a track and choose **Add to Liked Songs** or **Remove from
 Spotify Liked Songs**. These actions change your Spotify account. Stars and
-Favorites remain local to Cadence. If you signed in before this feature was
+Favorites remain local to Sonder. If you signed in before this feature was
 added, sign out through the account menu and sign in again once to approve
 `user-library-modify`. The app reports failed writes and preserves the prior
 state. One click-driven request runs at a time; it waits for library refresh
@@ -224,7 +224,7 @@ the appearance. The app uses the same theme colour values on both platforms.
 Submitted search shows a bounded Gallery of Top Artists, Top Albums, and Songs,
 with one shared scroll area and no public-playlist discovery. Album header
 artist names open their profiles using the loaded Spotify IDs. Closing the last
-Windows window exits Cadence, stopping playback and its background services.
+Windows window exits Sonder, stopping playback and its background services.
 
 
 Artist discographies load additional releases as you reach the end of the grid,

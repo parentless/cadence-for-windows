@@ -28,7 +28,7 @@ where
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(format!("{error:#}").into()),
             Err(_) => Err(SharedString::new_static(
-                "Cadence backend stopped before answering",
+                "Sonder backend stopped before answering",
             )),
         }
     }

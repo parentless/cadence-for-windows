@@ -38,7 +38,7 @@ pub(super) fn clear_disk_cache() {
 
 impl ImageHttpClient {
     pub(super) fn new() -> Result<Self> {
-        let user_agent = http::HeaderValue::from_static("Cadence/0.1");
+        let user_agent = http::HeaderValue::from_static("Sonder/0.1");
         let client = reqwest::Client::builder()
             .use_rustls_tls()
             .user_agent(user_agent.clone())

@@ -14,7 +14,7 @@ struct Published {
 }
 
 /// Publishes now-playing information to the operating system and accepts the transport
-/// commands it sends back, so Cadence can be driven without its window.
+/// commands it sends back, so Sonder can be driven without its window.
 pub(super) struct SystemMediaControls {
     controls: MediaControls,
     published: Option<Published>,
@@ -36,7 +36,7 @@ impl SystemMediaControls {
             })
             .ok()?;
         let mut controls = MediaControls::new(PlatformConfig {
-            display_name: "Cadence",
+            display_name: "Sonder",
             dbus_name: "cadence",
             #[cfg(not(target_os = "windows"))]
             hwnd: None,
@@ -134,7 +134,7 @@ pub(super) enum Transport {
     Seek(u32),
 }
 
-/// Translates a system command, ignoring the ones Cadence does not offer.
+/// Translates a system command, ignoring the ones Sonder does not offer.
 fn transport_for(event: MediaControlEvent) -> Option<Transport> {
     match event {
         MediaControlEvent::Play => Some(Transport::Play),
@@ -175,7 +175,7 @@ impl MediaWindow {
             CreateWindowExW(
                 WS_EX_TOOLWINDOW,
                 w!("STATIC"),
-                w!("Cadence"),
+                w!("Sonder"),
                 WS_OVERLAPPED,
                 0,
                 0,

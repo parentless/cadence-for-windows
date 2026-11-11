@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use gpui_kit::{AssetSource, Result, SharedString};
 
-/// Cadence's own SVG icons, with gpui-kit's bundle behind them for the icons
+/// Sonder's own SVG icons, with gpui-kit's bundle behind them for the icons
 /// the kit's components request.
 #[derive(rust_embed::RustEmbed)]
 #[folder = "assets/icons"]
