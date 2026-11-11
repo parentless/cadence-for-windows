@@ -42,6 +42,8 @@ mod disk_cache;
 mod http;
 mod image_cache;
 mod playlist_buffer;
+#[cfg(target_os = "windows")]
+mod tray_host;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -299,6 +301,8 @@ enum ConnectionState {
     SetupRequired,
     AuthorizationRequired,
     Connecting,
+    /// Signed in with a free account, which cannot stream through Cadence.
+    PremiumRequired,
     Ready,
 }
 

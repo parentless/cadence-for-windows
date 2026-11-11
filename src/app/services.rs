@@ -87,6 +87,8 @@ impl AppServices {
         store: Option<Store>,
         preferences: AppPreferences,
     ) -> BackendHandle {
+        // Before the backend can connect playback.
+        crate::playback::set_normalisation(preferences.normalise_volume);
         let (backend, events) = Backend::start();
         let handle = backend.handle();
         let player =
@@ -380,6 +382,36 @@ impl AppServices {
             .store
             .as_mut()
             .map(|store| store.set_autoplay(autoplay))
+    }
+
+    pub(super) fn set_normalise_volume(
+        normalise: bool,
+        cx: &mut App,
+    ) -> Option<anyhow::Result<()>> {
+        let services = cx.global_mut::<Self>();
+        let result = services
+            .store
+            .as_mut()
+            .map(|store| store.set_normalise_volume(normalise));
+        if result.as_ref().is_some_and(|result| result.is_ok()) {
+            services.preferences.normalise_volume = normalise;
+            crate::playback::set_normalisation(normalise);
+        }
+        result
+    }
+
+    pub(super) fn set_keep_in_tray(keep: bool, cx: &mut App) -> Option<anyhow::Result<()>> {
+        let services = cx.global_mut::<Self>();
+        let result = services
+            .store
+            .as_mut()
+            .map(|store| store.set_keep_in_tray(keep));
+        if result.as_ref().is_some_and(|result| result.is_ok()) {
+            services.preferences.keep_in_tray = keep;
+            #[cfg(target_os = "windows")]
+            super::tray_host::apply(keep, cx);
+        }
+        result
     }
 
     pub(super) fn set_mascot(mascot: MascotPreference, cx: &mut App) -> Option<anyhow::Result<()>> {

@@ -2,6 +2,7 @@ use super::*;
 use gpui_kit::TestSupportExt as _;
 
 pub(super) const SPOTIFY_DASHBOARD_URL: &str = "https://developer.spotify.com/dashboard";
+const SPOTIFY_PREMIUM_URL: &str = "https://www.spotify.com/premium/";
 pub(super) const SPOTIFY_REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 
 /// What the setup screens ask the workspace to do.
@@ -95,6 +96,7 @@ impl Onboarding {
         let content = match self.session.read(cx).state() {
             ConnectionState::Failed => self.backend_failure(cx),
             ConnectionState::SetupRequired => self.spotify_setup_form(window, cx),
+            ConnectionState::PremiumRequired => self.premium_required(cx),
             ConnectionState::AuthorizationRequired | ConnectionState::Connecting => {
                 self.spotify_login_form(cx)
             }
@@ -160,6 +162,71 @@ impl Onboarding {
                         .mt_6()
                         .on_click(
                             cx.listener(|_, _, _, cx| cx.emit(OnboardingEvent::RetryBackend)),
+                        ),
+                ),
+        )
+    }
+
+    /// Shown when the signed-in account is on the free plan, which Spotify does
+    /// not allow third-party players to stream for.
+    fn premium_required(&self, cx: &mut Context<Self>) -> Div {
+        let palette = appearance::Appearance::palette(cx);
+        let name = self
+            .session
+            .read(cx)
+            .profile()
+            .map(|profile| profile.display_name.clone());
+        div().flex_1().flex().items_center().justify_center().child(
+            div()
+                .id("premium-required")
+                .w(tokens::STATUS_CARD_WIDTH)
+                .p_8()
+                .rounded_2xl()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.canvas))
+                .child(
+                    div()
+                        .text_2xl()
+                        .font_weight(gpui_kit::FontWeight::BOLD)
+                        .text_color(rgb(palette.text_primary))
+                        .child("Spotify Premium required"),
+                )
+                .child(
+                    div()
+                        .mt_3()
+                        .text_sm()
+                        .line_height(relative(1.5))
+                        .text_color(rgb(palette.text_muted))
+                        .child(match name {
+                            Some(name) => format!(
+                                "{name} is on the free plan. Cadence plays music through Spotify's streaming service, which only works with Premium."
+                            ),
+                            None => "This account is on the free plan. Cadence plays music through Spotify's streaming service, which only works with Premium.".to_owned(),
+                        }),
+                )
+                .child(
+                    div()
+                        .mt_6()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            components::pill(palette, "premium-plans", "See Premium plans", true)
+                                .h_10()
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    cx.open_url(SPOTIFY_PREMIUM_URL);
+                                })),
+                        )
+                        .child(
+                            components::settings_button(
+                                palette,
+                                "premium-switch-account",
+                                "Use another account",
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.session.update(cx, |session, cx| session.logout(cx));
+                            })),
                         ),
                 ),
         )

@@ -130,6 +130,24 @@ impl Workspace {
                     }
                     cx.notify();
                 }
+                settings::SettingsEvent::SetNormaliseVolume(normalise) => {
+                    let result = services::AppServices::set_normalise_volume(*normalise, cx);
+                    let result = services::require_settings_storage(result);
+                    if let Some(error) =
+                        services::preference_save_error("volume normalization", result)
+                    {
+                        this.last_error = Some(error);
+                    }
+                    cx.notify();
+                }
+                settings::SettingsEvent::SetKeepInTray(keep) => {
+                    let result = services::AppServices::set_keep_in_tray(*keep, cx);
+                    let result = services::require_settings_storage(result);
+                    if let Some(error) = services::preference_save_error("tray setting", result) {
+                        this.last_error = Some(error);
+                    }
+                    cx.notify();
+                }
                 settings::SettingsEvent::SetDiscord(config) => {
                     if let Err(error) =
                         services::AppServices::set_discord_config(config.clone(), cx)
@@ -330,6 +348,28 @@ impl Workspace {
                         .child("Connecting to Spotify…"),
                 )
             }
+            ConnectionState::PremiumRequired => card
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette.text_primary))
+                        .child("Spotify Premium required"),
+                )
+                .child(
+                    div()
+                        .text_size(tokens::BODY_TEXT)
+                        .text_color(rgb(palette.text_muted))
+                        .child("This account is on the free plan."),
+                )
+                .child(
+                    components::pill(palette, "open-sign-in-window", "Learn more", true)
+                        .h_10()
+                        .mt_2()
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            windows::ensure_onboarding_window(cx);
+                        })),
+                ),
             ConnectionState::SetupRequired
             | ConnectionState::AuthorizationRequired
             | ConnectionState::Failed => card

@@ -37,6 +37,7 @@ enum Scene {
     SettingsCache,
     Setup,
     SetupFilled,
+    PremiumRequired,
     SearchEntered,
     CachedSearch,
     PlaybackPending,
@@ -84,6 +85,7 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("settings-mascot-open", Scene::SettingsMenu),
         ("setup", Scene::Setup),
         ("setup-filled", Scene::SetupFilled),
+        ("premium-required", Scene::PremiumRequired),
         ("search-entered", Scene::SearchEntered),
         ("search-cached", Scene::CachedSearch),
         ("playback-pending", Scene::PlaybackPending),
@@ -164,10 +166,18 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
     };
     let mut main_workspace = None;
     let mut _pending_artist_page = None;
-    let handle = if matches!(scene, Scene::Setup | Scene::SetupFilled) {
+    let handle = if matches!(
+        scene,
+        Scene::Setup | Scene::SetupFilled | Scene::PremiumRequired
+    ) {
         cx.update(|cx| {
             services::AppServices::session(cx).update(cx, |session, cx| {
-                session.handle_backend_event(BackendEvent::SetupRequired, cx);
+                let event = if matches!(scene, Scene::PremiumRequired) {
+                    BackendEvent::PremiumRequired
+                } else {
+                    BackendEvent::SetupRequired
+                };
+                session.handle_backend_event(event, cx);
             });
         });
         cx.open_window(size(px(width), px(height)), |window, cx| {

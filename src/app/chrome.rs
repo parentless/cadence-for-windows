@@ -421,6 +421,7 @@ impl Toolbar {
             ConnectionState::SetupRequired => "Developer app required".into(),
             ConnectionState::AuthorizationRequired => "Not connected".into(),
             ConnectionState::Connecting => "Connecting…".into(),
+            ConnectionState::PremiumRequired => "Premium required".into(),
             ConnectionState::Ready => "Spotify connected".into(),
         }
     }

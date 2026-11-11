@@ -56,6 +56,7 @@ impl Workspace {
                 | BackendEvent::LoggedOut
                 | BackendEvent::CatalogReady { .. }
                 | BackendEvent::ProfileLoaded { .. }
+                | BackendEvent::PremiumRequired
                 | BackendEvent::AuthorizationFailed(_)
                 | BackendEvent::FatalError(_)
                 | BackendEvent::LibraryLoaded { .. }

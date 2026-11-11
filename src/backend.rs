@@ -469,6 +469,8 @@ pub enum BackendEvent {
         error: String,
     },
     PlaybackFailed(String),
+    /// The account is on the free plan, which cannot stream through Cadence.
+    PremiumRequired,
     TrackFailed {
         spotify_uri: String,
         error: String,
@@ -1986,10 +1988,17 @@ impl Worker {
                     .fail_pending_play(&error, &self.events)
                     .await;
                 self.pending_playlist_cursor = None;
-                let _ = self
-                    .events
-                    .send(BackendEvent::PlaybackFailed(error.to_string()))
-                    .await;
+                if error
+                    .downcast_ref::<crate::playback::PremiumRequired>()
+                    .is_some()
+                {
+                    let _ = self.events.send(BackendEvent::PremiumRequired).await;
+                } else {
+                    let _ = self
+                        .events
+                        .send(BackendEvent::PlaybackFailed(error.to_string()))
+                        .await;
+                }
             }
             Some(Err(error)) => {
                 self.connection

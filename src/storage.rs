@@ -96,6 +96,10 @@ pub struct AppPreferences {
     pub selection_color: SelectionColor,
     pub ui_zoom: UiZoom,
     pub autoplay: bool,
+    /// Evens out loudness between songs. Off unless the listener turns it on.
+    pub normalise_volume: bool,
+    /// Closing the window keeps Cadence running from the tray (Windows).
+    pub keep_in_tray: bool,
     pub mascot: MascotPreference,
 }
 
@@ -108,6 +112,8 @@ impl Default for AppPreferences {
             ui_zoom: UiZoom::default(),
             // Autoplay is on unless the listener turned it off.
             autoplay: true,
+            normalise_volume: false,
+            keep_in_tray: false,
             mascot: MascotPreference::default(),
         }
     }
@@ -308,6 +314,8 @@ impl Store {
             _ => ThemePreference::System,
         };
         let autoplay = self.preference("autoplay")?.as_deref() != Some("false");
+        let normalise_volume = self.preference("normalise_volume")?.as_deref() == Some("true");
+        let keep_in_tray = self.preference("keep_in_tray")?.as_deref() == Some("true");
         let mascot = match self.preference("mascot")?.as_deref() {
             Some("none") => MascotPreference::None,
             Some("vespa_duo") => MascotPreference::VespaDuo,
@@ -330,6 +338,8 @@ impl Store {
                 .find(|color| selection_color.as_deref() == Some(color.name()))
                 .unwrap_or_default(),
             autoplay,
+            normalise_volume,
+            keep_in_tray,
             mascot,
         })
     }
@@ -399,6 +409,14 @@ impl Store {
 
     pub fn set_autoplay(&mut self, autoplay: bool) -> Result<()> {
         self.set_preference("autoplay", if autoplay { "true" } else { "false" })
+    }
+
+    pub fn set_normalise_volume(&mut self, normalise: bool) -> Result<()> {
+        self.set_preference("normalise_volume", if normalise { "true" } else { "false" })
+    }
+
+    pub fn set_keep_in_tray(&mut self, keep: bool) -> Result<()> {
+        self.set_preference("keep_in_tray", if keep { "true" } else { "false" })
     }
 
     pub fn set_mascot(&mut self, mascot: MascotPreference) -> Result<()> {
@@ -1028,6 +1046,8 @@ mod tests {
         store.set_sidebar_collapsed(true).unwrap();
         store.set_theme_preference(ThemePreference::Dark).unwrap();
         store.set_autoplay(false).unwrap();
+        store.set_normalise_volume(true).unwrap();
+        store.set_keep_in_tray(true).unwrap();
         store
             .set_mascot(MascotPreference::TarantellaDancer)
             .unwrap();
@@ -1039,6 +1059,8 @@ mod tests {
                 selection_color: super::SelectionColor::default(),
                 ui_zoom: super::UiZoom::default(),
                 autoplay: false,
+                normalise_volume: true,
+                keep_in_tray: true,
                 mascot: MascotPreference::TarantellaDancer,
             }
         );

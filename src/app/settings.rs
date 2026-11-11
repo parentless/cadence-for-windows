@@ -46,6 +46,8 @@ pub(super) enum SettingsEvent {
     SetTheme(ThemePreference),
     SetZoom(UiZoom),
     SetAutoplay(bool),
+    SetNormaliseVolume(bool),
+    SetKeepInTray(bool),
     SetMascot(MascotPreference),
     SetDiscord(crate::discord::Config),
     SetLastfm(crate::lastfm::Config),
@@ -83,6 +85,8 @@ pub(super) struct Settings {
     /// Each switch is ringed while its focus is inside, in place of the kit's
     /// ring, which also shows after a click.
     autoplay_focus: FocusHandle,
+    normalise_focus: FocusHandle,
+    tray_focus: FocusHandle,
     automatic_updates_focus: FocusHandle,
     discord_focus: FocusHandle,
     discord_application_id: Entity<InputState>,
@@ -163,6 +167,8 @@ impl Settings {
             scroll: gpui_kit::ScrollHandle::new(),
             mascot_select,
             autoplay_focus: cx.focus_handle(),
+            normalise_focus: cx.focus_handle(),
+            tray_focus: cx.focus_handle(),
             automatic_updates_focus: cx.focus_handle(),
             discord_focus: cx.focus_handle(),
             lastfm_focus: cx.focus_handle(),
@@ -208,6 +214,8 @@ impl Settings {
         let dashboard_url = format!("{}/{client_id}", onboarding::SPOTIFY_DASHBOARD_URL);
         let preferences = services::AppServices::preferences(cx);
         let autoplay = preferences.autoplay;
+        let normalise_volume = preferences.normalise_volume;
+        let keep_in_tray = preferences.keep_in_tray;
 
         let tab = self.tab;
         // The tab list stays put while the selected group scrolls beside it.
@@ -346,7 +354,69 @@ impl Settings {
                                                     .w(tokens::SETTINGS_FIELD_WIDTH)
                                                     .menu_width(tokens::SETTINGS_FIELD_WIDTH),
                                             )),
-                                    ),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt_5()
+                                            .pt_5()
+                                            .border_t_1()
+                                            .border_color(rgb(palette.border))
+                                            .child(Self::playback_setting_row(
+                                                palette,
+                                                "Normalize volume",
+                                                "Keep songs at a similar loudness. Takes effect the next time playback connects, such as after restarting Cadence.",
+                                                components::focus_ring_around(
+                                                    palette,
+                                                    &self.normalise_focus,
+                                                    window,
+                                                    cx,
+                                                    Switch::new("settings-normalise-volume")
+                                                        .focus_ring(false)
+                                                        .checked(normalise_volume)
+                                                        .on_click(cx.listener(
+                                                            |_, checked: &bool, _, cx| {
+                                                                cx.emit(
+                                                                    SettingsEvent::SetNormaliseVolume(
+                                                                        *checked,
+                                                                    ),
+                                                                );
+                                                            },
+                                                        )),
+                                                ),
+                                            )),
+                                    )
+                                    .when(cfg!(target_os = "windows"), |card| {
+                                        card.child(
+                                            div()
+                                                .mt_5()
+                                                .pt_5()
+                                                .border_t_1()
+                                                .border_color(rgb(palette.border))
+                                                .child(Self::playback_setting_row(
+                                                    palette,
+                                                    "Keep running in the tray",
+                                                    "Closing the window keeps the music playing. Click the tray icon to bring Cadence back.",
+                                                    components::focus_ring_around(
+                                                        palette,
+                                                        &self.tray_focus,
+                                                        window,
+                                                        cx,
+                                                        Switch::new("settings-keep-in-tray")
+                                                            .focus_ring(false)
+                                                            .checked(keep_in_tray)
+                                                            .on_click(cx.listener(
+                                                                |_, checked: &bool, _, cx| {
+                                                                    cx.emit(
+                                                                        SettingsEvent::SetKeepInTray(
+                                                                            *checked,
+                                                                        ),
+                                                                    );
+                                                                },
+                                                            )),
+                                                    ),
+                                                )),
+                                        )
+                                    }),
                             ),
                     )
                     )

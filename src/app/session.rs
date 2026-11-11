@@ -279,7 +279,9 @@ impl Session {
                 cx.emit(SessionEvent::LoggedOut);
             }
             BackendEvent::CatalogReady { generation } => {
-                if generation == self.generation {
+                if generation == self.generation
+                    && !matches!(self.state, ConnectionState::PremiumRequired)
+                {
                     self.state = ConnectionState::Ready;
                     self.last_failure = None;
                     cx.emit(SessionEvent::Ready);
@@ -292,6 +294,10 @@ impl Session {
                 if generation == self.generation {
                     self.profile = Some(profile);
                 }
+            }
+            BackendEvent::PremiumRequired => {
+                self.state = ConnectionState::PremiumRequired;
+                self.last_failure = None;
             }
             BackendEvent::AuthorizationFailed(error) => {
                 self.state = ConnectionState::AuthorizationRequired;

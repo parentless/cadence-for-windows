@@ -1,4 +1,11 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use keyring::Entry;
@@ -216,12 +223,24 @@ impl Playback {
             .connect(Credentials::with_access_token(access_token), false)
             .await
             .context("librespot could not connect to Spotify")?;
+        // Spotify announces the plan right after sign-in. A free account cannot
+        // stream here, so say so instead of failing later with a vague error.
+        for _ in 0..ACCOUNT_TYPE_POLLS {
+            if let Some(kind) = session.get_user_attribute("type") {
+                if kind != "premium" {
+                    return Err(PremiumRequired.into());
+                }
+                break;
+            }
+            tokio::time::sleep(ACCOUNT_TYPE_POLL_DELAY).await;
+        }
         let mixer = mixer::find(None).context("no supported audio mixer is available")?(
             MixerConfig::default(),
         )?;
         let volume = mixer.get_soft_volume();
         let player_config = PlayerConfig {
             position_update_interval: Some(Duration::from_millis(250)),
+            normalisation: NORMALISE_VOLUME.load(Ordering::Relaxed),
             ..PlayerConfig::default()
         };
         let player = Player::new(player_config, session.clone(), volume, move || {
@@ -360,6 +379,30 @@ async fn load_playback_refresh_token() -> Result<Option<String>> {
 async fn persist_playback_refresh_token(refresh_token: String) -> Result<()> {
     credential_worker::run(move || save_playback_refresh_token(&refresh_token)).await
 }
+
+/// Whether the next playback connection evens out loudness. Set from the saved
+/// preference at startup and whenever the listener changes it.
+static NORMALISE_VOLUME: AtomicBool = AtomicBool::new(false);
+
+pub fn set_normalisation(enabled: bool) {
+    NORMALISE_VOLUME.store(enabled, Ordering::Relaxed);
+}
+
+/// Spotify's streaming service only accepts Premium accounts.
+#[derive(Debug)]
+pub struct PremiumRequired;
+
+impl std::fmt::Display for PremiumRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Spotify Premium is required")
+    }
+}
+
+impl std::error::Error for PremiumRequired {}
+
+/// The plan normally arrives within milliseconds; give a slow link a few seconds.
+const ACCOUNT_TYPE_POLLS: u32 = 60;
+const ACCOUNT_TYPE_POLL_DELAY: Duration = Duration::from_millis(100);
 
 fn validate_refresh_token(refresh_token: &str) -> Result<&str> {
     if refresh_token.is_empty() {

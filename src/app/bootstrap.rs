@@ -48,6 +48,8 @@ pub(super) fn run() {
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &CheckForUpdates, cx| updater::check_for_updates(cx));
         services::AppServices::init(cx, lifecycle, preferences_store, preferences);
+        #[cfg(target_os = "windows")]
+        tray_host::apply(preferences.keep_in_tray, cx);
         bind_keys(cx);
         let updates_available = updater::start(cx);
         // Without a menu bar, Cmd+Q is only deliverable through a window, so

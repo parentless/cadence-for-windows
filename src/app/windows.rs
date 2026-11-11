@@ -14,6 +14,8 @@ pub(super) enum DesiredWindows {
 pub(super) fn desired_windows(state: ConnectionState, has_been_ready: bool) -> DesiredWindows {
     match state {
         ConnectionState::Ready => DesiredWindows::MainOnly,
+        // Nothing in the main window works on a free plan, so it does not stay up.
+        ConnectionState::PremiumRequired => DesiredWindows::OnboardingOnly,
         ConnectionState::Starting
         | ConnectionState::Failed
         | ConnectionState::SetupRequired
@@ -469,6 +471,16 @@ mod tests {
                 desired_windows(state, false),
                 DesiredWindows::OnboardingOnly,
                 "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_free_account_gets_only_the_premium_screen() {
+        for has_been_ready in [false, true] {
+            assert_eq!(
+                desired_windows(ConnectionState::PremiumRequired, has_been_ready),
+                DesiredWindows::OnboardingOnly
             );
         }
     }
