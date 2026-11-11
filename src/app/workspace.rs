@@ -17,6 +17,7 @@ pub(super) struct Workspace {
     pub(super) library: Entity<library::Library>,
     pub(super) liked_songs: Entity<library_pages::LibraryTracksPage>,
     pub(super) favorites: Entity<library_pages::LibraryTracksPage>,
+    pub(super) home: Entity<home::HomePage>,
     pub(super) recent: Entity<library_pages::LibraryTracksPage>,
     pub(super) playlists: Entity<library_pages::PlaylistsPage>,
     pub(super) search: Entity<catalog::SearchPage>,
@@ -90,6 +91,7 @@ impl Workspace {
         let favorites = library_page(LibrarySection::Favorites, cx);
         let recent = library_page(LibrarySection::Recent, cx);
         let playlists = cx.new(library_pages::PlaylistsPage::new);
+        let home = cx.new(|cx| home::HomePage::new(backend.clone(), cx));
         let search = cx.new(|cx| catalog::SearchPage::new(backend.clone(), cx));
         let playlist = cx.new(|cx| catalog::PlaylistPage::new(backend.clone(), cx));
         let artist = cx.new(|cx| catalog::ArtistPage::new(backend.clone(), cx));
@@ -97,6 +99,7 @@ impl Workspace {
         subscriptions.extend([
             cx.subscribe(&liked_songs, Workspace::handle_page_event),
             cx.subscribe(&favorites, Workspace::handle_page_event),
+            cx.subscribe(&home, Workspace::handle_page_event),
             cx.subscribe(&recent, Workspace::handle_page_event),
             cx.subscribe(&playlists, Workspace::handle_page_event),
             cx.subscribe(&search, Workspace::handle_page_event),
@@ -252,6 +255,7 @@ impl Workspace {
             library,
             liked_songs,
             favorites,
+            home,
             recent,
             playlists,
             search,
@@ -295,6 +299,7 @@ impl Workspace {
     /// The page for the route the listener is on.
     fn page(&self) -> AnyElement {
         match self.router.route() {
+            Route::Home => self.home.clone().into_any_element(),
             Route::LikedSongs => self.liked_songs.clone().into_any_element(),
             Route::Favorites => self.favorites.clone().into_any_element(),
             Route::Recent => self.recent.clone().into_any_element(),

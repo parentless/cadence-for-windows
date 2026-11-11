@@ -188,6 +188,7 @@ impl Workspace {
             .update(cx, |drawer, cx| drawer.close_menus(cx));
         self.liked_songs.update(cx, |page, cx| page.close_menus(cx));
         self.favorites.update(cx, |page, cx| page.close_menus(cx));
+        self.home.update(cx, |page, cx| page.close_menus(cx));
         self.recent.update(cx, |page, cx| page.close_menus(cx));
         self.search.update(cx, |page, cx| page.close_menus(cx));
         self.playlist.update(cx, |page, cx| page.close_menus(cx));
@@ -247,6 +248,8 @@ impl Workspace {
     /// listener ended up, whichever way the route changed.
     fn settle_navigation(&mut self, cx: &mut Context<Self>) {
         let route = self.router.route();
+        self.home
+            .update(cx, |page, cx| page.set_visible(route == Route::Home, cx));
         let pinned_origin = self.router.pinned_origin();
         let active_playlist = self
             .playlist

@@ -10,7 +10,7 @@ use track_list::TrackList;
 /// Dropping the returned future is what cancels the request: the page holds it
 /// in a `Task`, so starting a new request drops the previous one and its answer
 /// is discarded rather than overwriting fresher state.
-fn request<T, C>(
+pub(super) fn request<T, C>(
     backend: &BackendHandle,
     command: C,
 ) -> impl Future<Output = Result<T, SharedString>> + use<T, C>

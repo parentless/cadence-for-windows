@@ -190,8 +190,30 @@ impl From<Vec<Album>> for ArtistAlbumPage {
 }
 
 pub const SEARCH_ARTIST_LIMIT: usize = 3;
+/// Home shows two rows of five artists and a screenful of tracks.
+pub const HOME_ARTIST_LIMIT: usize = 10;
+pub const HOME_TRACK_LIMIT: usize = 20;
 pub const SEARCH_ALBUM_LIMIT: usize = 4;
 pub const SEARCH_TRACK_LIMIT: usize = 5;
+
+/// What the Home page shows: the listener's most played artists and tracks.
+#[derive(Debug, Default)]
+pub struct HomeData {
+    pub artists: Vec<Artist>,
+    pub tracks: Vec<Track>,
+}
+
+/// The saved sign-in predates the permission to read top artists and tracks.
+#[derive(Debug)]
+pub struct HomePermissionMissing;
+
+impl std::fmt::Display for HomePermissionMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Sign in again to let Cadence read your top artists and tracks")
+    }
+}
+
+impl std::error::Error for HomePermissionMissing {}
 
 /// Bounded catalog results from one combined Spotify search request.
 #[derive(Debug, Default)]

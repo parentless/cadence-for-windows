@@ -39,6 +39,7 @@ use library_pages::LibrarySection;
 use workspace::Workspace;
 
 mod disk_cache;
+mod home;
 mod http;
 mod image_cache;
 mod playlist_buffer;
@@ -283,6 +284,7 @@ fn uses_compact_player_layout(viewport_width: Pixels, rem_size: Pixels) -> bool 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Route {
+    Home,
     LikedSongs,
     Favorites,
     Recent,

@@ -6,6 +6,8 @@ use gpui_kit::{SharedString, component::IconNamed};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CadenceIcon {
+    Home,
+    HomeFilled,
     Heart,
     HeartFilled,
     Star,
@@ -41,7 +43,9 @@ pub(super) enum CadenceIcon {
 
 impl CadenceIcon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 31] = [
+    pub(super) const ALL: [Self; 33] = [
+        Self::Home,
+        Self::HomeFilled,
         Self::Heart,
         Self::HeartFilled,
         Self::Star,
@@ -77,6 +81,8 @@ impl CadenceIcon {
 
     fn file_name(self) -> &'static str {
         match self {
+            Self::Home => "home",
+            Self::HomeFilled => "home-filled",
             Self::Heart => "heart",
             Self::HeartFilled => "heart-filled",
             Self::Star => "star",

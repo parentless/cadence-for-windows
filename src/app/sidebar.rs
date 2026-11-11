@@ -23,20 +23,20 @@ struct NavItem {
 
 const NAV_ITEMS: [NavItem; 4] = [
     NavItem {
+        id: "nav-home",
+        fill_id: "nav-home-fill",
+        label: "Home",
+        icon: CadenceIcon::Home,
+        selected_icon: CadenceIcon::HomeFilled,
+        route: Route::Home,
+    },
+    NavItem {
         id: "nav-library",
         fill_id: "nav-library-fill",
         label: "Liked Songs",
         icon: CadenceIcon::Heart,
         selected_icon: CadenceIcon::HeartFilled,
         route: Route::LikedSongs,
-    },
-    NavItem {
-        id: "nav-favorites",
-        fill_id: "nav-favorites-fill",
-        label: "Favorites",
-        icon: CadenceIcon::Star,
-        selected_icon: CadenceIcon::StarFilled,
-        route: Route::Favorites,
     },
     NavItem {
         id: "nav-playlist",

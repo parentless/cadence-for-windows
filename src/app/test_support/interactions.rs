@@ -444,7 +444,7 @@ fn cached_suggestions_reject_replaced_library_rows_and_close_outside() {
     });
     fixture.cx.advance_clock(Duration::from_millis(130));
     fixture.wait_for(|window, _| window.try_find("cached-search-suggestions").is_some());
-    fixture.update(|window, cx| window.click("nav-favorites", cx));
+    fixture.update(|window, cx| window.click("nav-recent", cx));
     fixture.update(|window, _| assert!(window.try_find("cached-search-suggestions").is_none()));
 }
 
@@ -860,7 +860,7 @@ pub(super) fn credited_track() -> model::Track {
 
 #[test]
 fn shared_rows_open_each_artist_and_album_from_every_library_collection() {
-    for nav in ["nav-library", "nav-favorites", "nav-recent"] {
+    for nav in ["nav-library", "nav-recent"] {
         for artist in [Some(0usize), Some(1), None] {
             let mut fixture = Fixture::new(false);
             fixture.update(|_, cx| {
@@ -1755,11 +1755,11 @@ fn reduced_motion_toggles_the_sidebar_straight_to_its_final_width() {
 #[test]
 fn tab_reaches_the_sidebar_rows_and_enter_opens_the_focused_row() {
     let mut fixture = Fixture::new(false);
-    fixture.tab_to("nav-favorites");
+    fixture.tab_to("nav-recent");
 
     fixture.press("enter");
-    assert_eq!(fixture.route(), Route::Favorites);
-    assert!(fixture.focused("nav-favorites"));
+    assert_eq!(fixture.route(), Route::Recent);
+    assert!(fixture.focused("nav-recent"));
     fixture.no_commands();
 }
 
@@ -1787,9 +1787,9 @@ fn a_pointer_press_leaves_keyboard_focus_with_the_workspace() {
     });
     assert!(fixture.focused("search-input"));
 
-    fixture.update(|window, cx| window.click("nav-favorites", cx));
-    assert_eq!(fixture.route(), Route::Favorites);
-    assert!(!fixture.focused("nav-favorites"));
+    fixture.update(|window, cx| window.click("nav-recent", cx));
+    assert_eq!(fixture.route(), Route::Recent);
+    assert!(!fixture.focused("nav-recent"));
     assert!(!fixture.focused("search-input"));
 
     fixture.press("space");
@@ -2561,11 +2561,11 @@ fn collapsed_sidebar_keeps_playlist_buttons_inside_rail_and_promotes_opened_play
         );
         assert_eq!(window.find("nav-playlist").selected(), Some(false));
         assert!(
-            window.find("nav-library").bounds().top()
+            window.find("nav-home").bounds().top()
                 <= window.find("sidebar-toggle").bounds().bottom() + px(20.)
         );
         let rail_right = COLLAPSED_SIDEBAR_WIDTH.to_pixels(window.rem_size());
-        for id in ["nav-library", "nav-favorites", "nav-playlist", "nav-recent"] {
+        for id in ["nav-home", "nav-library", "nav-playlist", "nav-recent"] {
             assert!(window.find(id).bounds().right() <= rail_right);
         }
         let cover = window.find(("sidebar-playlist", 2usize)).bounds();
@@ -3200,8 +3200,8 @@ fn collapsed_rail_tooltips_center_on_each_trigger_instead_of_pointer() {
     fixture.cx.advance_clock(Duration::from_secs(1));
     fixture.update(|_, _| {});
     for id in [
+        "nav-home",
         "nav-library",
-        "nav-favorites",
         "nav-recent",
         "nav-playlist",
         "nav-library",
@@ -3679,5 +3679,52 @@ fn settings_tabs_show_one_group_at_a_time() {
     });
     fixture.update(|window, cx| window.click(("settings-tab", 0usize), cx));
     fixture.update(|window, _| assert!(window.try_find("settings-autoplay").is_some()));
+    fixture.no_commands();
+}
+
+#[test]
+fn home_loads_top_items_once_when_opened_and_opens_an_artist() {
+    let mut fixture = Fixture::new(false);
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click("nav-home", cx));
+    let BackendCommand::LoadHome { respond } = fixture.backend.commands.try_recv().unwrap() else {
+        panic!("expected a Home request")
+    };
+    respond
+        .send(Ok(model::HomeData {
+            artists: vec![model::Artist {
+                provider: model::Provider::Spotify,
+                source_id: "artist-1".into(),
+                spotify_uri: Some("spotify:artist:artist-1".into()),
+                name: "Top Artist".into(),
+                artwork_url: None,
+            }],
+            tracks: vec![credited_track()],
+        }))
+        .unwrap();
+    fixture.update(|_, _| {});
+    // Leaving and returning within the freshness window must not refetch.
+    fixture.update(|window, cx| window.click("nav-recent", cx));
+    fixture.update(|window, cx| window.click("nav-home", cx));
+    fixture.no_commands();
+    fixture.update(|window, cx| window.click(("home-artist", 0usize), cx));
+    assert_eq!(fixture.route(), Route::Artist);
+}
+
+#[test]
+fn home_asks_for_a_new_sign_in_when_the_permission_is_missing() {
+    let mut fixture = Fixture::new(false);
+    fixture.update(|window, cx| window.click("nav-home", cx));
+    let BackendCommand::LoadHome { respond } = fixture.backend.commands.try_recv().unwrap() else {
+        panic!("expected a Home request")
+    };
+    respond
+        .send(Err(model::HomePermissionMissing.into()))
+        .unwrap();
+    fixture.update(|_, _| {});
+    fixture.update(|window, _| assert!(window.try_find("home-sign-in-again").is_some()));
+    // Revisiting does not hammer a request that cannot succeed.
+    fixture.update(|window, cx| window.click("nav-recent", cx));
+    fixture.update(|window, cx| window.click("nav-home", cx));
     fixture.no_commands();
 }

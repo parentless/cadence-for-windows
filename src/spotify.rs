@@ -12,7 +12,7 @@ use rspotify::{
     model::{
         AlbumId, AlbumType, ArtistId, FullAlbum, FullArtist, FullTrack, Id, Image, LibraryId,
         Market, PlayableItem, PlaylistId, SavedTrack, SearchResult, SearchType, SimplifiedAlbum,
-        SimplifiedArtist, SimplifiedPlaylist, SimplifiedTrack, TrackId,
+        SimplifiedArtist, SimplifiedPlaylist, SimplifiedTrack, TimeRange, TrackId,
     },
     prelude::{BaseClient, OAuthClient},
     scopes,
@@ -304,7 +304,8 @@ impl Spotify {
                 "user-library-modify",
                 "playlist-read-private",
                 "playlist-read-collaborative",
-                "user-read-private"
+                "user-read-private",
+                "user-top-read"
             ),
             ..Default::default()
         };
@@ -436,6 +437,47 @@ impl Spotify {
                     .flat_map(|page| page.items)
                     .filter_map(convert_simplified_album)
                     .take(crate::model::SEARCH_ALBUM_LIMIT)
+                    .collect(),
+            })
+        })
+        .await
+    }
+
+    /// The listener's most played artists and tracks over roughly six months.
+    /// Two small requests, made only when the Home page asks.
+    pub async fn home(&self) -> Result<crate::model::HomeData> {
+        self.gated(async {
+            let authorized = self
+                .client
+                .token
+                .lock()
+                .await
+                .map_err(|_| anyhow!("could not lock Spotify token state"))?
+                .as_ref()
+                .is_some_and(|token| token.scopes.contains("user-top-read"));
+            if !authorized {
+                return Err(crate::model::HomePermissionMissing.into());
+            }
+            let (artists, tracks) = futures::try_join!(
+                self.client.current_user_top_artists_manual(
+                    Some(TimeRange::MediumTerm),
+                    Some(crate::model::HOME_ARTIST_LIMIT as u32),
+                    Some(0),
+                ),
+                self.client.current_user_top_tracks_manual(
+                    Some(TimeRange::MediumTerm),
+                    Some(crate::model::HOME_TRACK_LIMIT as u32),
+                    Some(0),
+                ),
+            )?;
+            Ok(crate::model::HomeData {
+                artists: artists.items.into_iter().map(convert_artist).collect(),
+                tracks: tracks
+                    .items
+                    .into_iter()
+                    .filter(|track| !track.is_local && track.id.is_some())
+                    .filter_map(|track| convert_track(track).ok())
+                    .filter(Track::is_displayable)
                     .collect(),
             })
         })

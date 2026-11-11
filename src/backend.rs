@@ -311,6 +311,9 @@ pub enum BackendCommand {
     ReloadLibrary {
         respond: Reply<LibraryReload>,
     },
+    LoadHome {
+        respond: Reply<crate::model::HomeData>,
+    },
     SearchCatalog {
         query: String,
         respond: Reply<crate::model::CatalogSearchResults>,
@@ -1281,6 +1284,10 @@ impl Worker {
             }
             BackendCommand::ReloadLibrary { respond } => {
                 self.reload_library(respond);
+                Ok(())
+            }
+            BackendCommand::LoadHome { respond } => {
+                self.catalog.home(self.spotify.clone(), respond);
                 Ok(())
             }
             BackendCommand::SearchCatalog { query, respond } => {
@@ -2585,6 +2592,7 @@ struct CatalogFetches {
     library: Option<tokio::task::JoinHandle<()>>,
     reload: Option<tokio::task::JoinHandle<()>>,
     search: Option<tokio::task::JoinHandle<()>>,
+    home: Option<tokio::task::JoinHandle<()>>,
     playlist: Option<tokio::task::JoinHandle<()>>,
     artist: Option<tokio::task::JoinHandle<()>>,
     artist_albums: Option<tokio::task::JoinHandle<()>>,
@@ -2618,6 +2626,12 @@ impl CatalogFetches {
             events,
             self.library_fingerprint.clone(),
         ));
+    }
+
+    fn home(&mut self, spotify: Spotify, respond: Reply<crate::model::HomeData>) {
+        Self::start(&mut self.home, respond, "Spotify top items", async move {
+            spotify.home().await
+        });
     }
 
     fn search(
@@ -2709,6 +2723,7 @@ impl CatalogFetches {
         abort_task(&mut self.library);
         abort_task(&mut self.reload);
         abort_task(&mut self.search);
+        abort_task(&mut self.home);
         abort_task(&mut self.playlist);
         abort_task(&mut self.artist);
         abort_task(&mut self.artist_albums);

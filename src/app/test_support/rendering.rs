@@ -38,6 +38,8 @@ enum Scene {
     Setup,
     SetupFilled,
     PremiumRequired,
+    Home,
+    HomePermission,
     SearchEntered,
     CachedSearch,
     PlaybackPending,
@@ -86,6 +88,8 @@ fn scenes() -> Vec<(&'static str, Scene)> {
         ("setup", Scene::Setup),
         ("setup-filled", Scene::SetupFilled),
         ("premium-required", Scene::PremiumRequired),
+        ("home", Scene::Home),
+        ("home-permission", Scene::HomePermission),
         ("search-entered", Scene::SearchEntered),
         ("search-cached", Scene::CachedSearch),
         ("playback-pending", Scene::PlaybackPending),
@@ -338,6 +342,25 @@ fn capture(scene: Scene, theme: ThemePreference, width: f32) -> image::RgbaImage
                     workspace.navigate(Route::Search, cx);
                     let BackendCommand::SearchCatalog { respond, .. } = backend.commands.try_recv().unwrap() else { panic!("search request") };
                     respond.send(Ok(super::gallery_results())).unwrap();
+                }
+                Scene::Home | Scene::HomePermission => {
+                    workspace.navigate(Route::Home, cx);
+                    let BackendCommand::LoadHome { respond } = backend.commands.try_recv().unwrap() else { panic!("home request") };
+                    if matches!(scene, Scene::HomePermission) {
+                        respond.send(Err(model::HomePermissionMissing.into())).unwrap();
+                    } else {
+                        let results = super::gallery_results();
+                        respond.send(Ok(model::HomeData {
+                            artists: (0..7).map(|index| model::Artist {
+                                provider: model::Provider::Spotify,
+                                source_id: format!("top-{index}"),
+                                spotify_uri: None,
+                                name: ["glaive", "Glass Animals", "Glasser", "Gladys Knight", "Glass Beams", "Glaive Jr", "Glasvegas"][index].into(),
+                                artwork_url: None,
+                            }).collect(),
+                            tracks: results.tracks,
+                        })).unwrap();
+                    }
                 }
                 Scene::PlaybackPending => { services::AppServices::player(cx).update(cx, |player, cx| player.set_loading(true, cx)); }
                 Scene::ShuffleOn => { services::AppServices::player(cx).update(cx, |player, cx| player.toggle_shuffle(cx)); }
