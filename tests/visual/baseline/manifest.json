@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.21",
+    "cadence": "0.8.22",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "ab81c38d2910ed0f4423cf8c11e41c05c19a34b6",
-    "lockfile_sha256": "1510dffe4640deee414d844b06294e44bc45de6d3681a55ee96afac3183c2805"
+    "revision": "360952d90bfde1a63e2515f139b9cd43bb8a8cdd",
+    "lockfile_sha256": "8716f521d6e7a4fa498ff88670fec74db9228376c3b10c0d4f2b08634001e4bc"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43068178963",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43111725872",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,17 +57,18 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.21",
+      "cadence": "0.8.22",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "ab81c38d2910ed0f4423cf8c11e41c05c19a34b6",
-      "lockfile_sha256": "1510dffe4640deee414d844b06294e44bc45de6d3681a55ee96afac3183c2805"
+      "revision": "360952d90bfde1a63e2515f139b9cd43bb8a8cdd",
+      "lockfile_sha256": "8716f521d6e7a4fa498ff88670fec74db9228376c3b10c0d4f2b08634001e4bc"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43068178963"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43111725872"
   },
   "reviewed_changes": [
     "Settings gains General, Connections and System tabs in a left rail; General holds appearance and playback, Connections holds Spotify, Discord and the new opt-in Last.fm section, System holds updates and cache",
     "The sidebar gains Home at the top and loses Favorites, so all 156 full-window references change; Settings also gets the wider (11 rem) tab rail, a Normalize volume switch (off by default) and the version 0.8.21; the other 20 references (sign-in screens) are pixel-identical to 0.8.19",
+    "Renamed to Sonder with a ripple mark on a dark grey tile: the sidebar brand, its logo and the fixture artist text change in every full-window reference, and Settings shows version 0.8.22 and Sonder wording; the 20 sign-in references only change where they name the app",
     "Eight new references: Premium-required (shown to free Spotify accounts instead of the app closing), Home with top artists and tracks, and Home asking for the new top-items permission; each in dark/light and regular/compact",
     "The Cache text now mentions the bounded on-disk artwork cache (48 MiB); Clear cache empties memory and disk",
     "Last.fm scrobbling is event-driven with one idle worker thread, one exact timer and a bounded retry queue; its secret and session key stay in the system keychain",
