@@ -60,7 +60,7 @@ jobs:
       - run: cargo test --locked --manifest-path web/Cargo.toml
       - name: Assets stay in sync
         run: |
-          cmp assets/cadence-mark.svg web/static/cadence-mark.svg
+          cmp assets/sonder-mark.svg web/static/cadence-mark.svg
           cmp assets/cadence.webp web/static/cadence.webp
       - name: Docker smoke test
         run: |
