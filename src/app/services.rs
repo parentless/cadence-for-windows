@@ -19,6 +19,8 @@ pub(super) struct AppServices {
     media_controls: Option<media_controls::SystemMediaControls>,
     discord_config: crate::discord::Config,
     discord: Option<crate::discord::Presence>,
+    lastfm_config: crate::lastfm::Config,
+    lastfm: Option<crate::lastfm::Scrobbler>,
     /// The window currently showing these services, if one is open.
     root: Option<gpui_kit::WeakEntity<Workspace>>,
     /// The open main and sign-in windows. Slots are cleared when gpui reports
@@ -64,6 +66,8 @@ impl AppServices {
             media_controls: None,
             discord_config: crate::discord::Config::default(),
             discord: None,
+            lastfm_config: crate::lastfm::Config::default(),
+            lastfm: None,
             root: None,
             main_window: None,
             onboarding_window: None,
@@ -102,6 +106,7 @@ impl AppServices {
                 controls.sync(player.read(cx));
             }
             services.publish_discord(cx);
+            services.publish_lastfm(cx);
             cx.set_global(services);
         })
         .detach();
@@ -122,6 +127,7 @@ impl AppServices {
         cx.observe(&session, |_, cx| {
             let mut services = cx.remove_global::<Self>();
             services.publish_discord(cx);
+            services.publish_lastfm(cx);
             cx.set_global(services);
             windows::sync_windows(cx);
         })
@@ -131,6 +137,17 @@ impl AppServices {
             .as_ref()
             .and_then(|store| store.discord_config().ok())
             .unwrap_or_default();
+        let lastfm_config = store
+            .as_ref()
+            .and_then(|store| store.lastfm_config().ok())
+            .unwrap_or_default();
+        let lastfm = if lastfm_config.enabled {
+            crate::lastfm::Scrobbler::start(&lastfm_config)
+                .map_err(|error| log::warn!("could not enable Last.fm: {error}"))
+                .ok()
+        } else {
+            None
+        };
         let discord = if discord_config.enabled {
             crate::discord::Presence::start(discord_config.application_id.clone())
                 .map_err(|error| log::warn!("could not enable Discord presence: {error}"))
@@ -148,6 +165,8 @@ impl AppServices {
             media_controls,
             discord_config,
             discord,
+            lastfm_config,
+            lastfm,
             root: None,
             main_window: None,
             onboarding_window: None,
@@ -204,6 +223,56 @@ impl AppServices {
         })();
         cx.set_global(services);
         result
+    }
+
+    pub(super) fn lastfm_config(cx: &App) -> &crate::lastfm::Config {
+        &cx.global::<Self>().lastfm_config
+    }
+
+    /// Saves the Last.fm settings and starts or stops the scrobbler to match.
+    pub(super) fn set_lastfm_config(
+        config: crate::lastfm::Config,
+        cx: &mut App,
+    ) -> anyhow::Result<()> {
+        let mut services = cx.remove_global::<Self>();
+        let result = (|| -> anyhow::Result<()> {
+            let run = config.enabled && config.connected();
+            let replacement = if run
+                && (services.lastfm.is_none()
+                    || services.lastfm_config.api_key != config.api_key
+                    || services.lastfm_config.username != config.username)
+            {
+                Some(crate::lastfm::Scrobbler::start(&config)?)
+            } else {
+                None
+            };
+            services
+                .store
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("settings storage is unavailable"))?
+                .set_lastfm_config(&config)?;
+            if !run {
+                services.lastfm = None;
+            } else if let Some(replacement) = replacement {
+                services.lastfm = Some(replacement);
+            }
+            services.lastfm_config = config;
+            services.publish_lastfm(cx);
+            Ok(())
+        })();
+        cx.set_global(services);
+        result
+    }
+
+    fn publish_lastfm(&mut self, cx: &App) {
+        if let Some(lastfm) = self.lastfm.as_mut() {
+            let player = self.player.read(cx);
+            lastfm.sync(
+                player.now_playing(),
+                player.playing() && self.session.read(cx).is_ready(),
+                player.position_ms(cx.background_executor().now()),
+            );
+        }
     }
 
     fn publish_discord(&mut self, cx: &App) {
@@ -479,6 +548,7 @@ impl AppServices {
     /// straight after `applicationWillTerminate:`, so nothing else will.
     fn shutdown(cx: &mut App) {
         cx.global_mut::<Self>().discord = None;
+        cx.global_mut::<Self>().lastfm = None;
         let position_ms = Self::player(cx).read(cx).position_snapshot();
         // Stop the worker before writing, both because its shutdown drops any
         // command still queued behind it, and so it cannot write a later

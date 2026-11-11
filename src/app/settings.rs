@@ -48,6 +48,7 @@ pub(super) enum SettingsEvent {
     SetAutoplay(bool),
     SetMascot(MascotPreference),
     SetDiscord(crate::discord::Config),
+    SetLastfm(crate::lastfm::Config),
 }
 
 /// The settings page: appearance, playback, and the Spotify developer app.
@@ -61,6 +62,13 @@ pub(super) struct Settings {
     discord_focus: FocusHandle,
     discord_application_id: Entity<InputState>,
     discord_error: Option<SharedString>,
+    lastfm_focus: FocusHandle,
+    lastfm_api_key: Entity<InputState>,
+    lastfm_api_secret: Entity<InputState>,
+    lastfm_status: Option<SharedString>,
+    /// Set between asking Last.fm for a sign-in link and finishing it.
+    lastfm_token: Option<String>,
+    lastfm_busy: bool,
     cache_cleared: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -110,6 +118,17 @@ impl Settings {
                 _ => {}
             },
         ));
+        let lastfm_api_key = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Last.fm API key");
+            input.set_value(
+                services::AppServices::lastfm_config(cx).api_key.clone(),
+                window,
+                cx,
+            );
+            input
+        });
+        let lastfm_api_secret =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Last.fm shared secret"));
         if let Some(status) = updater::status(cx) {
             subscriptions.push(cx.observe(&status, |_, _, cx| cx.notify()));
         }
@@ -119,6 +138,12 @@ impl Settings {
             autoplay_focus: cx.focus_handle(),
             automatic_updates_focus: cx.focus_handle(),
             discord_focus: cx.focus_handle(),
+            lastfm_focus: cx.focus_handle(),
+            lastfm_api_key,
+            lastfm_api_secret,
+            lastfm_status: None,
+            lastfm_token: None,
+            lastfm_busy: false,
             discord_application_id,
             discord_error: None,
             cache_cleared: false,
@@ -388,6 +413,7 @@ impl Settings {
                             ),
                     )
                     .child(self.discord_section(palette, window, cx))
+                    .child(self.lastfm_section(palette, window, cx))
                     .child(self.updates_section(palette, window, cx))
                     .child(self.cache_section(palette, cx)),
             )
@@ -419,6 +445,155 @@ impl Settings {
             application_id,
         }));
         cx.notify();
+    }
+
+    fn set_lastfm_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let mut config = services::AppServices::lastfm_config(cx).clone();
+        if enabled && !config.connected() {
+            self.lastfm_status = Some("Connect your Last.fm account first.".into());
+            cx.notify();
+            return;
+        }
+        config.enabled = enabled;
+        self.lastfm_status = None;
+        cx.emit(SettingsEvent::SetLastfm(config));
+        cx.notify();
+    }
+
+    /// Two steps: ask Last.fm for a sign-in page, then finish once approved.
+    fn lastfm_connect(&mut self, cx: &mut Context<Self>) {
+        if self.lastfm_busy {
+            return;
+        }
+        let api_key = self.lastfm_api_key.read(cx).value().trim().to_owned();
+        let api_secret = self.lastfm_api_secret.read(cx).value().trim().to_owned();
+        self.lastfm_busy = true;
+        self.lastfm_status = Some("Contacting Last.fm…".into());
+        cx.notify();
+        if let Some(token) = self.lastfm_token.clone() {
+            let reply = crate::lastfm::finish_auth(api_key.clone(), api_secret, token);
+            cx.spawn(async move |this, cx| {
+                let result = reply.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.lastfm_busy = false;
+                    match result {
+                        Ok(Ok(username)) => {
+                            this.lastfm_token = None;
+                            this.lastfm_status = None;
+                            cx.emit(SettingsEvent::SetLastfm(crate::lastfm::Config {
+                                enabled: true,
+                                api_key,
+                                username,
+                            }));
+                        }
+                        Ok(Err(error)) => this.lastfm_status = Some(format!("{error:#}").into()),
+                        Err(_) => {
+                            this.lastfm_status = Some("Last.fm sign-in did not finish.".into())
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else {
+            let reply = crate::lastfm::begin_auth(api_key, api_secret);
+            cx.spawn(async move |this, cx| {
+                let result = reply.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.lastfm_busy = false;
+                    match result {
+                        Ok(Ok(start)) => {
+                            this.lastfm_token = Some(start.token);
+                            this.lastfm_status = Some(
+                                "Approve Cadence in your browser, then press Finish connecting."
+                                    .into(),
+                            );
+                            cx.open_url(&start.url);
+                        }
+                        Ok(Err(error)) => this.lastfm_status = Some(format!("{error:#}").into()),
+                        Err(_) => {
+                            this.lastfm_status = Some("Last.fm sign-in did not finish.".into())
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    fn lastfm_disconnect(&mut self, cx: &mut Context<Self>) {
+        if self.lastfm_busy {
+            return;
+        }
+        self.lastfm_busy = true;
+        let api_key = services::AppServices::lastfm_config(cx).api_key.clone();
+        let reply = crate::lastfm::forget_credentials();
+        cx.spawn(async move |this, cx| {
+            let result = reply.await;
+            let _ = this.update(cx, |this, cx| {
+                this.lastfm_busy = false;
+                match result {
+                    Ok(Ok(())) => {
+                        this.lastfm_status = None;
+                        cx.emit(SettingsEvent::SetLastfm(crate::lastfm::Config {
+                            enabled: false,
+                            api_key,
+                            username: String::new(),
+                        }));
+                    }
+                    Ok(Err(error)) => this.lastfm_status = Some(format!("{error:#}").into()),
+                    Err(_) => {
+                        this.lastfm_status = Some("Could not remove the Last.fm sign-in.".into())
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn lastfm_section(
+        &self,
+        palette: CadencePalette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let config = services::AppServices::lastfm_config(cx).clone();
+        let connect_label = if self.lastfm_token.is_some() {
+            "Finish connecting"
+        } else {
+            "Connect"
+        };
+        div().mt_12()
+            .child(Self::settings_section_header(palette, "Last.fm", "Optionally scrobble what you listen to."))
+            .child(div().mt_4().rounded_2xl().border_1().border_color(rgb(palette.border))
+                .bg(rgb(palette.surface_raised)).p_5()
+                .child(Self::playback_setting_row(palette, "Scrobble to Last.fm",
+                    if config.connected() { "Plays after half the track or four minutes. Retries when offline." } else { "Connect an account below to turn this on." },
+                    components::focus_ring_around(palette, &self.lastfm_focus, window, cx,
+                        Switch::new("settings-lastfm-enabled").focus_ring(false).checked(config.enabled)
+                            .on_click(cx.listener(|this, enabled: &bool, _, cx| this.set_lastfm_enabled(*enabled, cx))))))
+                .child(if config.connected() {
+                    div().mt_5().pt_5().border_t_1().border_color(rgb(palette.border))
+                        .child(div().text_xs().text_color(rgb(palette.text)).child(format!("Connected as {}", config.username)))
+                        .child(components::settings_button(palette, "settings-lastfm-disconnect", "Disconnect")
+                            .mt_3().on_click(cx.listener(|this, _, _, cx| this.lastfm_disconnect(cx))))
+                } else {
+                    div().mt_5().pt_5().border_t_1().border_color(rgb(palette.border))
+                        .child(div().text_xs().text_color(rgb(palette.text)).child("API key and shared secret"))
+                        .child(div().mt_2().child(Input::new(&self.lastfm_api_key).id("settings-lastfm-api-key").w_full()))
+                        .child(div().mt_2().child(Input::new(&self.lastfm_api_secret).id("settings-lastfm-api-secret").w_full()))
+                        .child(div().mt_2().text_size(tokens::CAPTION_TEXT).text_color(rgb(palette.text_muted))
+                            .child("Create a free Last.fm API account, then paste its key and shared secret. The secret stays in your system keychain."))
+                        .child(h_flex().mt_3().gap_3()
+                            .child(components::settings_button(palette, "settings-lastfm-connect", connect_label)
+                                .on_click(cx.listener(|this, _, _, cx| this.lastfm_connect(cx))))
+                            .child(components::settings_button(palette, "settings-lastfm-portal", "Create API account")
+                                .on_click(|_, _, cx| cx.open_url("https://www.last.fm/api/account/create"))))
+                })
+                .when_some(self.lastfm_status.clone(), |card, status| card.child(div().mt_2().text_sm().text_color(rgb(palette.text)).child(status))))
     }
 
     fn discord_section(

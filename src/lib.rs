@@ -5,6 +5,7 @@ mod credential_worker;
 #[cfg(target_os = "windows")]
 mod diagnostics;
 pub(crate) mod discord;
+pub(crate) mod lastfm;
 pub mod lifecycle;
 pub mod model;
 mod oauth_callback;

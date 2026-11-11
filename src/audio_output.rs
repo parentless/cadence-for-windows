@@ -28,6 +28,8 @@ use rubato::{Fft, FixedSync, Resampler as _, audioadapter_buffers::direct::Inter
 const QUEUE_TARGET: Duration = Duration::from_millis(150);
 const MAX_QUEUE_BYTES: usize = 64 * 1024 * 1024;
 const RESAMPLER_CHUNK_FRAMES: usize = 256;
+const WRITE_RETRY_DELAY: Duration = Duration::from_millis(10);
+const CLEAR_POLL_DELAY: Duration = Duration::from_millis(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const RECOVERY_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -57,7 +59,7 @@ fn wait_until_cleared(
                 "audio output did not start consuming samples".to_owned(),
             ));
         }
-        thread::sleep(Duration::from_millis(2));
+        thread::sleep(CLEAR_POLL_DELAY);
     }
     if failed.load(Ordering::Acquire) {
         Err(SinkError::StateChange(
@@ -251,7 +253,9 @@ impl BufferWriter {
                         "audio output stopped consuming samples".to_owned(),
                     ));
                 }
-                thread::sleep(Duration::from_millis(2));
+                // The queue holds 150 ms, so waking every 10 ms keeps it topped
+                // up while cutting idle wakeups five-fold versus 2 ms.
+                thread::sleep(WRITE_RETRY_DELAY);
             }
         }
         Ok(())

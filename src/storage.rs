@@ -343,6 +343,38 @@ impl Store {
         })
     }
 
+    pub(crate) fn lastfm_config(&self) -> Result<crate::lastfm::Config> {
+        Ok(crate::lastfm::Config {
+            enabled: self.preference("lastfm_enabled")?.as_deref() == Some("true"),
+            api_key: self.preference("lastfm_api_key")?.unwrap_or_default(),
+            username: self.preference("lastfm_username")?.unwrap_or_default(),
+        })
+    }
+
+    pub(crate) fn set_lastfm_config(&mut self, config: &crate::lastfm::Config) -> Result<()> {
+        anyhow::ensure!(
+            !config.enabled
+                || (config.connected() && crate::lastfm::valid_credential(&config.api_key)),
+            "connect a Last.fm account first"
+        );
+        let transaction = self.connection.transaction()?;
+        for (key, value) in [
+            (
+                "lastfm_enabled",
+                if config.enabled { "true" } else { "false" },
+            ),
+            ("lastfm_api_key", config.api_key.as_str()),
+            ("lastfm_username", config.username.as_str()),
+        ] {
+            transaction.execute(
+                "INSERT INTO preferences (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn set_discord_config(&mut self, config: &crate::discord::Config) -> Result<()> {
         anyhow::ensure!(
             !config.enabled || crate::discord::valid_application_id(&config.application_id),
@@ -747,6 +779,10 @@ impl Store {
     ) -> Result<()> {
         let transaction = self.connection.transaction()?;
         transaction.execute("DELETE FROM liked_tracks_cache", [])?;
+        let mut insert_track = transaction.prepare_cached(
+            "INSERT INTO liked_tracks_cache (position, track_json, refreshed_at)
+             VALUES (?1, ?2, unixepoch())",
+        )?;
         for (position, track) in tracks
             .iter()
             .filter(|track| track.is_displayable())
@@ -754,21 +790,19 @@ impl Store {
         {
             let position =
                 i64::try_from(position).context("liked-track position exceeds SQLite range")?;
-            transaction.execute(
-                "INSERT INTO liked_tracks_cache (position, track_json, refreshed_at)
-                 VALUES (?1, ?2, unixepoch())",
-                params![position, serde_json::to_string(track)?],
-            )?;
+            insert_track.execute(params![position, serde_json::to_string(track)?])?;
         }
+        drop(insert_track);
         transaction.execute("DELETE FROM playlists_cache", [])?;
+        let mut insert_playlist = transaction.prepare_cached(
+            "INSERT INTO playlists_cache (position, playlist_json) VALUES (?1, ?2)",
+        )?;
         for (position, playlist) in playlists.iter().enumerate() {
             let position =
                 i64::try_from(position).context("playlist position exceeds SQLite range")?;
-            transaction.execute(
-                "INSERT INTO playlists_cache (position, playlist_json) VALUES (?1, ?2)",
-                params![position, serde_json::to_string(playlist)?],
-            )?;
+            insert_playlist.execute(params![position, serde_json::to_string(playlist)?])?;
         }
+        drop(insert_playlist);
         match fingerprint {
             Some(fingerprint) => transaction.execute(
                 "INSERT INTO preferences (key, value) VALUES (?1, ?2)
@@ -877,6 +911,30 @@ mod tests {
 
         store.set_favorite(&track, false).unwrap();
         assert!(store.favorites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn lastfm_configuration_requires_a_connection_and_persists() {
+        let mut store = Store::in_memory().unwrap();
+        assert_eq!(
+            store.lastfm_config().unwrap(),
+            crate::lastfm::Config::default()
+        );
+        let key = "0123456789abcdef0123456789abcdef".to_owned();
+        let unconnected = crate::lastfm::Config {
+            enabled: true,
+            api_key: key.clone(),
+            username: String::new(),
+        };
+        assert!(store.set_lastfm_config(&unconnected).is_err());
+        assert!(!store.lastfm_config().unwrap().enabled);
+        let connected = crate::lastfm::Config {
+            enabled: true,
+            api_key: key,
+            username: "listener".into(),
+        };
+        store.set_lastfm_config(&connected).unwrap();
+        assert_eq!(store.lastfm_config().unwrap(), connected);
     }
 
     #[test]

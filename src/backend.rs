@@ -691,7 +691,13 @@ impl Backend {
         let thread = thread::Builder::new()
             .name("cadence-backend".to_owned())
             .spawn(move || {
-                let runtime = tokio::runtime::Runtime::new().expect("could not start Tokio");
+                // The backend is a command loop plus a few HTTP requests; a thread per
+                // core only adds stacks and scheduler wakeups.
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("could not start Tokio");
                 let acknowledged = runtime.block_on(run(
                     command_receiver,
                     control_receiver,

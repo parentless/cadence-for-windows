@@ -27,9 +27,15 @@ pixels differ rather than by the pass or fail: an unintended layout shift moves
 controls that the change should not have touched.
 
 To accept an intended visual change, capture on the CI platform rather than
-locally: run **Actions → Regenerate screenshots** on the branch, download the
-artifact, review the images, copy them over `tests/visual/baseline/*.png`, update
-`manifest.json` provenance, then commit. `tests/visual/README.md` has the detail.
+locally. Push the branch, then run `scripts/accept-baseline.sh`: it dispatches
+**Regenerate screenshots**, waits, copies only the changed images over
+`tests/visual/baseline/*.png`, refreshes `manifest.json` provenance and lists what
+changed. Review those images, edit `reviewed_changes`, then commit. (Pass a run id
+to accept an existing run.)
+
+`scripts/ship.sh` pushes the branch and waits for CI, printing one summary line;
+`scripts/ship.sh --main` fast-forwards `main` and also waits for the release. Prefer
+them to polling `gh` by hand. `tests/visual/README.md` has the detail.
 
 ## Releases
 

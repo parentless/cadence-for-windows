@@ -19,6 +19,7 @@ futures = "0.3"
 gpui-kit = "0.7.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 keyring = "4.1"
+md-5 = "0.10"
 librespot = { version = "0.8.0", default-features = false, features = ["native-tls"] }
 raw-window-handle = "0.6"
 oauth2 = { version = "5.0", default-features = false, features = ["reqwest", "native-tls"] }

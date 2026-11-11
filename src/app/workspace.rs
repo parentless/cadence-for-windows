@@ -140,6 +140,15 @@ impl Workspace {
                     this.settings.update(cx, |_, cx| cx.notify());
                     cx.notify();
                 }
+                settings::SettingsEvent::SetLastfm(config) => {
+                    if let Err(error) = services::AppServices::set_lastfm_config(config.clone(), cx)
+                    {
+                        this.last_error =
+                            Some(format!("Could not save Last.fm settings: {error}").into());
+                    }
+                    this.settings.update(cx, |_, cx| cx.notify());
+                    cx.notify();
+                }
                 settings::SettingsEvent::SetMascot(mascot) => {
                     let result = services::AppServices::set_mascot(*mascot, cx);
                     let result = services::require_settings_storage(result);

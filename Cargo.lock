@@ -961,6 +961,7 @@ dependencies = [
  "keyring",
  "librespot",
  "log",
+ "md-5",
  "oauth2",
  "objc",
  "open",
