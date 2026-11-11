@@ -465,6 +465,7 @@ impl Settings {
         div()
             .flex_none()
             .w(tokens::SETTINGS_NAV_WIDTH)
+            .mr_6()
             .pl_10()
             .pt_7()
             .flex()

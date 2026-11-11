@@ -3,7 +3,7 @@
     "cadence": "0.8.19",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "f18726c3bcbc738f2aaca32e89969a7ad1e01a71",
+    "revision": "0657c46d68e61395568c95580cd2e680effaaa89",
     "lockfile_sha256": "efd81aa87a2baa3b5fb2ef117f7192f082d41ebdcbbf400e99165926914b72d2"
   },
   "platform": {
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42955033786",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42959272076",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -60,10 +60,10 @@
       "cadence": "0.8.19",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "f18726c3bcbc738f2aaca32e89969a7ad1e01a71",
+      "revision": "0657c46d68e61395568c95580cd2e680effaaa89",
       "lockfile_sha256": "efd81aa87a2baa3b5fb2ef117f7192f082d41ebdcbbf400e99165926914b72d2"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42955033786"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42959272076"
   },
   "reviewed_changes": [
     "Settings gains an opt-in Last.fm section between Discord and Updates: scrobble toggle, API key and shared secret fields, Connect and Create API account buttons",
