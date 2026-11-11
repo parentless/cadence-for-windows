@@ -31,7 +31,7 @@ reqwest = { package = "gpui-pre-reqwest", version = "0.12.15", default-features 
 ringbuf = "0.5"
 rubato = "5"
 rust-embed = { version = "8", features = ["debug-embed"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.53", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
