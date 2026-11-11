@@ -3,7 +3,7 @@
     "cadence": "0.8.19",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "6bd9ed9a7cf42962fe9dc50c048caf86c847e933",
+    "revision": "e297355e5c3fc31a39d0923a2efa1dc65718c6c6",
     "lockfile_sha256": "efd81aa87a2baa3b5fb2ef117f7192f082d41ebdcbbf400e99165926914b72d2"
   },
   "platform": {
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42959835510",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42961259367",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -60,15 +60,16 @@
       "cadence": "0.8.19",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "6bd9ed9a7cf42962fe9dc50c048caf86c847e933",
+      "revision": "e297355e5c3fc31a39d0923a2efa1dc65718c6c6",
       "lockfile_sha256": "efd81aa87a2baa3b5fb2ef117f7192f082d41ebdcbbf400e99165926914b72d2"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42959835510"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42961259367"
   },
   "reviewed_changes": [
-    "Settings gains an opt-in Last.fm section between Discord and Updates: scrobble toggle, API key and shared secret fields, Connect and Create API account buttons",
-    "Four Settings cache references change: the new section shifts the scrolled page and the version reads 0.8.19; the other 168 references are pixel-identical to 0.8.18",
-    "Last.fm scrobbling is event-driven with one idle worker thread, one exact timer and a bounded retry queue; secrets stay in the system keychain",
-    "Audio writer wakes every 10 ms instead of 2 ms, the backend runtime uses two worker threads, and library cache writes reuse prepared statements"
+    "Settings gains General, Connections and System tabs in a left rail; General holds appearance and playback, Connections holds Spotify, Discord and the new opt-in Last.fm section, System holds updates and cache",
+    "All 16 Settings references change for the tab rail and the version reads 0.8.19; the other 156 references are pixel-identical to 0.8.18. Row descriptions wrap so controls stay inside their cards at 900 points",
+    "The Cache text now mentions the bounded on-disk artwork cache (48 MiB); Clear cache empties memory and disk",
+    "Last.fm scrobbling is event-driven with one idle worker thread, one exact timer and a bounded retry queue; its secret and session key stay in the system keychain",
+    "Liking or unliking keeps the library fingerprint current so refreshes stay two-request probes; the audio writer wakes every 10 ms instead of 2 ms and the backend runtime uses two worker threads"
   ]
 }
