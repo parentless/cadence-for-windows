@@ -215,8 +215,6 @@ impl Settings {
             .size_full()
             .flex()
             .justify_center()
-            // Balances the tab list so the content column stays centered.
-            .pr(tokens::SETTINGS_NAV_WIDTH)
             .child(self.tab_list(palette, cx))
             .child(
         div()

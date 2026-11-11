@@ -39,7 +39,7 @@ pub(super) const NOTICE_BANNER_WIDTH: Rems = Rems(22.5);
 pub(super) const NOTICE_BANNER_TOP: Rems = Rems(4.75);
 pub(super) const SETTINGS_MAX_WIDTH: Rems = Rems(47.5);
 pub(super) const SETTINGS_FIELD_WIDTH: Rems = Rems(13.75);
-pub(super) const SETTINGS_NAV_WIDTH: Rems = Rems(10.5);
+pub(super) const SETTINGS_NAV_WIDTH: Rems = Rems(9.5);
 
 pub(super) const NAV_ROW_HEIGHT: Rems = Rems(2.625);
 pub(super) const BRAND_LABEL_GAP: Rems = Rems(1.03125);

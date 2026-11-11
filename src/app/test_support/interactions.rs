@@ -633,7 +633,8 @@ fn mascot_select_commits_enter_and_preserves_selection_on_escape_and_outside_cli
         window.within("settings-mascot").click("input", cx);
     });
     fixture.update(|window, cx| window.press("down", cx));
-    fixture.update(|window, cx| window.click("volume", cx));
+    // Any control outside the open menu; the tab list never sits under it.
+    fixture.update(|window, cx| window.click(("settings-tab", 0usize), cx));
     fixture.wait_for(|window, _| window.find("settings-mascot").expanded() == Some(false));
     fixture.update(|window, cx| {
         assert_eq!(
