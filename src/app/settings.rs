@@ -815,6 +815,8 @@ impl Settings {
             .child(
                 v_flex()
                     .flex_1()
+                    // Let the description wrap instead of pushing the control out of its card.
+                    .min_w_0()
                     .max_w(relative(0.6))
                     .gap_1()
                     .child(
@@ -951,7 +953,7 @@ impl Settings {
                             .child(description),
                     ),
             )
-            .child(div().child(field))
+            .child(div().flex_none().child(field))
     }
 
     fn appearance_option(
