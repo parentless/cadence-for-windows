@@ -286,7 +286,6 @@ fn uses_compact_player_layout(viewport_width: Pixels, rem_size: Pixels) -> bool 
 enum Route {
     Home,
     LikedSongs,
-    Favorites,
     Recent,
     Search,
     Playlists,

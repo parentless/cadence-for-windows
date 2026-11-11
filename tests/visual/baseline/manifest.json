@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.20",
+    "cadence": "0.8.21",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "d83da6ed0977d830bba91869743a50909320a6c0",
-    "lockfile_sha256": "9f74797d734915b04c635603ae0370f86ea0a7c839c42ef88f15f69db6ec190e"
+    "revision": "ab81c38d2910ed0f4423cf8c11e41c05c19a34b6",
+    "lockfile_sha256": "1510dffe4640deee414d844b06294e44bc45de6d3681a55ee96afac3183c2805"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43001388151",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43068178963",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,18 +57,18 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.20",
+      "cadence": "0.8.21",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "d83da6ed0977d830bba91869743a50909320a6c0",
-      "lockfile_sha256": "9f74797d734915b04c635603ae0370f86ea0a7c839c42ef88f15f69db6ec190e"
+      "revision": "ab81c38d2910ed0f4423cf8c11e41c05c19a34b6",
+      "lockfile_sha256": "1510dffe4640deee414d844b06294e44bc45de6d3681a55ee96afac3183c2805"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43001388151"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/43068178963"
   },
   "reviewed_changes": [
     "Settings gains General, Connections and System tabs in a left rail; General holds appearance and playback, Connections holds Spotify, Discord and the new opt-in Last.fm section, System holds updates and cache",
-    "All 16 Settings references change: the tab rail is wider (11 rem), a Normalize volume switch (off by default) joins Playback after Mascot, and the version reads 0.8.20; the other 156 existing references are pixel-identical to 0.8.19",
-    "Four new Premium-required references (dark/light, regular/compact) show the screen a free Spotify account gets instead of the app closing",
+    "The sidebar gains Home at the top and loses Favorites, so all 156 full-window references change; Settings also gets the wider (11 rem) tab rail, a Normalize volume switch (off by default) and the version 0.8.21; the other 20 references (sign-in screens) are pixel-identical to 0.8.19",
+    "Eight new references: Premium-required (shown to free Spotify accounts instead of the app closing), Home with top artists and tracks, and Home asking for the new top-items permission; each in dark/light and regular/compact",
     "The Cache text now mentions the bounded on-disk artwork cache (48 MiB); Clear cache empties memory and disk",
     "Last.fm scrobbling is event-driven with one idle worker thread, one exact timer and a bounded retry queue; its secret and session key stay in the system keychain",
     "Liking or unliking keeps the library fingerprint current so refreshes stay two-request probes; the audio writer wakes every 10 ms instead of 2 ms and the backend runtime uses two worker threads"

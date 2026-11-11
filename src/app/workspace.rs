@@ -16,7 +16,6 @@ pub(super) struct Workspace {
     pub(super) session: Entity<session::Session>,
     pub(super) library: Entity<library::Library>,
     pub(super) liked_songs: Entity<library_pages::LibraryTracksPage>,
-    pub(super) favorites: Entity<library_pages::LibraryTracksPage>,
     pub(super) home: Entity<home::HomePage>,
     pub(super) recent: Entity<library_pages::LibraryTracksPage>,
     pub(super) playlists: Entity<library_pages::PlaylistsPage>,
@@ -88,7 +87,6 @@ impl Workspace {
             cx.new(|cx| library_pages::LibraryTracksPage::new(section, cx))
         };
         let liked_songs = library_page(LibrarySection::LikedSongs, cx);
-        let favorites = library_page(LibrarySection::Favorites, cx);
         let recent = library_page(LibrarySection::Recent, cx);
         let playlists = cx.new(library_pages::PlaylistsPage::new);
         let home = cx.new(|cx| home::HomePage::new(backend.clone(), cx));
@@ -98,7 +96,6 @@ impl Workspace {
         let album = cx.new(|cx| catalog::AlbumPage::new(backend.clone(), cx));
         subscriptions.extend([
             cx.subscribe(&liked_songs, Workspace::handle_page_event),
-            cx.subscribe(&favorites, Workspace::handle_page_event),
             cx.subscribe(&home, Workspace::handle_page_event),
             cx.subscribe(&recent, Workspace::handle_page_event),
             cx.subscribe(&playlists, Workspace::handle_page_event),
@@ -254,7 +251,6 @@ impl Workspace {
             session,
             library,
             liked_songs,
-            favorites,
             home,
             recent,
             playlists,
@@ -301,7 +297,6 @@ impl Workspace {
         match self.router.route() {
             Route::Home => self.home.clone().into_any_element(),
             Route::LikedSongs => self.liked_songs.clone().into_any_element(),
-            Route::Favorites => self.favorites.clone().into_any_element(),
             Route::Recent => self.recent.clone().into_any_element(),
             Route::Search => self.search.clone().into_any_element(),
             Route::Playlists => self.playlists.clone().into_any_element(),

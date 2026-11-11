@@ -9,7 +9,6 @@ use page::PageEvent;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum LibrarySection {
     LikedSongs,
-    Favorites,
     Recent,
 }
 
@@ -17,7 +16,6 @@ impl LibrarySection {
     fn page_id(self) -> &'static str {
         match self {
             Self::LikedSongs => "liked-songs-page",
-            Self::Favorites => "favorites-page",
             Self::Recent => "recent-page",
         }
     }
@@ -25,7 +23,6 @@ impl LibrarySection {
     fn list_id(self) -> &'static str {
         match self {
             Self::LikedSongs => "liked-tracks",
-            Self::Favorites => "favorite-tracks",
             Self::Recent => "recent-tracks",
         }
     }
@@ -33,7 +30,6 @@ impl LibrarySection {
     fn title(self) -> &'static str {
         match self {
             Self::LikedSongs => "Liked Songs",
-            Self::Favorites => "Favorites",
             Self::Recent => "Recently played",
         }
     }
@@ -41,7 +37,6 @@ impl LibrarySection {
     fn empty_message(self) -> &'static str {
         match self {
             Self::LikedSongs => "No liked songs",
-            Self::Favorites => "No favorites yet",
             Self::Recent => "No listening history yet",
         }
     }
@@ -49,7 +44,6 @@ impl LibrarySection {
     fn loading_message(self) -> &'static str {
         match self {
             Self::LikedSongs => "Loading liked songs…",
-            Self::Favorites => "Loading favorites…",
             Self::Recent => "Loading listening history…",
         }
     }
@@ -57,7 +51,6 @@ impl LibrarySection {
     fn tracks(self, library: &library::Library) -> Arc<[model::Track]> {
         match self {
             Self::LikedSongs => library.liked_tracks().clone(),
-            Self::Favorites => library.favorites().clone(),
             Self::Recent => library.recently_played().clone(),
         }
     }
@@ -67,7 +60,7 @@ impl LibrarySection {
     fn loaded(self, library: &library::Library) -> bool {
         match self {
             Self::LikedSongs => library.loaded(),
-            Self::Favorites | Self::Recent => library.local_loaded(),
+            Self::Recent => library.local_loaded(),
         }
     }
 
@@ -81,7 +74,6 @@ impl LibrarySection {
                 },
                 library.reloading(),
             ),
-            Self::Favorites => "Starred in Cadence".to_owned(),
             Self::Recent => "Listening history".to_owned(),
         }
     }

@@ -187,7 +187,6 @@ impl Workspace {
         self.queue_drawer
             .update(cx, |drawer, cx| drawer.close_menus(cx));
         self.liked_songs.update(cx, |page, cx| page.close_menus(cx));
-        self.favorites.update(cx, |page, cx| page.close_menus(cx));
         self.home.update(cx, |page, cx| page.close_menus(cx));
         self.recent.update(cx, |page, cx| page.close_menus(cx));
         self.search.update(cx, |page, cx| page.close_menus(cx));
