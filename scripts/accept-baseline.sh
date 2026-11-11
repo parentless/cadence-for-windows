@@ -51,7 +51,8 @@ if [ $((${#changed[@]} + ${#added[@]})) -eq 0 ]; then
   echo "baseline already matches; nothing to do"
   exit 0
 fi
-for name in "${changed[@]}" "${added[@]}"; do
+# ${arr[@]+...} keeps empty arrays safe under `set -u` on macOS bash 3.2.
+for name in ${changed[@]+"${changed[@]}"} ${added[@]+"${added[@]}"}; do
   [ -n "$name" ] || continue
   cp -f "$art/$name" "$baseline/$name"
   echo "  $name"

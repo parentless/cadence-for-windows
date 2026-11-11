@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.18",
+    "cadence": "0.8.19",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "6eed357506ced546b82934019e01eb94c98b495e",
-    "lockfile_sha256": "aaaabe7be41ae8323b8147a86d6223ee9baae30918a80ffa1e981046fd030ce7"
+    "revision": "f18726c3bcbc738f2aaca32e89969a7ad1e01a71",
+    "lockfile_sha256": "efd81aa87a2baa3b5fb2ef117f7192f082d41ebdcbbf400e99165926914b72d2"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42914927922",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42955033786",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,19 +57,18 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.18",
+      "cadence": "0.8.19",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "6eed357506ced546b82934019e01eb94c98b495e",
-      "lockfile_sha256": "aaaabe7be41ae8323b8147a86d6223ee9baae30918a80ffa1e981046fd030ce7"
+      "revision": "f18726c3bcbc738f2aaca32e89969a7ad1e01a71",
+      "lockfile_sha256": "efd81aa87a2baa3b5fb2ef117f7192f082d41ebdcbbf400e99165926914b72d2"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42914927922"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42955033786"
   },
   "reviewed_changes": [
-    "Track context menus gain a track header, leading icons and a short local opacity transition; reduced motion skips interpolation and no action is delayed",
-    "Menus, transport feedback, player bar, artist header and sidebar reuse measured layouts and borrowed metadata to cut repeated UI work",
-    "Artwork loads visible covers first, keeps the two-worker limit and adds no disk cache; loaded covers no longer draw a placeholder underneath, and cache eviction refreshes affected views",
-    "All 172 native references repeat exactly on macOS 15.8.2; four track-menu captures and four Settings version captures changed; the other 164 references, including every player strip and the play icon, are pixel-identical to 0.8.17",
-    "Four Settings cache references change only the final version digit from 0.8.17 to 0.8.18"
+    "Settings gains an opt-in Last.fm section between Discord and Updates: scrobble toggle, API key and shared secret fields, Connect and Create API account buttons",
+    "Four Settings cache references change: the new section shifts the scrolled page and the version reads 0.8.19; the other 168 references are pixel-identical to 0.8.18",
+    "Last.fm scrobbling is event-driven with one idle worker thread, one exact timer and a bounded retry queue; secrets stay in the system keychain",
+    "Audio writer wakes every 10 ms instead of 2 ms, the backend runtime uses two worker threads, and library cache writes reuse prepared statements"
   ]
 }
