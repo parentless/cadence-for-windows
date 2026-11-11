@@ -936,6 +936,8 @@ impl Settings {
             .child(
                 v_flex()
                     .flex_1()
+                    // Let the description wrap instead of pushing the control out of its card.
+                    .min_w_0()
                     .max_w(relative(0.6))
                     .gap_1()
                     .child(
