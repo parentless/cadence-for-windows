@@ -1,10 +1,10 @@
 {
   "source": {
-    "cadence": "0.8.17",
+    "cadence": "0.8.18",
     "gpui-kit": "0.7.0",
     "gpui-pre": "0.3.7",
-    "revision": "7d162f5642839151467d41e550f715c9d5cc0d6a",
-    "lockfile_sha256": "6abb78fab10fa3e994b833889009a0f284c84a9012fe8c99f93f41609dd2a8c7"
+    "revision": "6eed357506ced546b82934019e01eb94c98b495e",
+    "lockfile_sha256": "aaaabe7be41ae8323b8147a86d6223ee9baae30918a80ffa1e981046fd030ce7"
   },
   "platform": {
     "os": "macOS",
@@ -38,7 +38,7 @@
   },
   "reduced_motion": true,
   "window_active": true,
-  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42884448178",
+  "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42914927922",
   "rust": "1.97.1",
   "keyboard_focus_details": {
     "cases": [
@@ -57,19 +57,19 @@
       "renderer": "Metal"
     },
     "source": {
-      "cadence": "0.8.17",
+      "cadence": "0.8.18",
       "gpui-kit": "0.7.0",
       "gpui-pre": "0.3.7",
-      "revision": "7d162f5642839151467d41e550f715c9d5cc0d6a",
-      "lockfile_sha256": "6abb78fab10fa3e994b833889009a0f284c84a9012fe8c99f93f41609dd2a8c7"
+      "revision": "6eed357506ced546b82934019e01eb94c98b495e",
+      "lockfile_sha256": "aaaabe7be41ae8323b8147a86d6223ee9baae30918a80ffa1e981046fd030ce7"
     },
-    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42884448178"
+    "capture_run": "https://github.com/parentless/cadence-for-windows/actions/runs/42914927922"
   },
   "reviewed_changes": [
-    "Artist discographies fetch additional ten-release pages at the visible footer, with static loading and retry states captured at both widths and appearances",
-    "Loaded releases merge newest first across pages; partial dates are normalized, missing dates sort last, duplicate IDs are excluded, and visible rows remain anchored",
-    "All 172 native references repeat exactly on macOS 15.8.2; eight new footer captures and four Settings version changes were reviewed; the other 160 references are pixel-identical to 0.8.16",
-    "Four Settings cache references change only the final version digit from 0.8.16 to 0.8.17",
-    "Interaction, HTTP, date, and lifetime tests cover small requests, raw cursors, single-flight loading, retry, duplicate-only continuation, cancellation, sort stability, anchors and release of retained allocations"
+    "Track context menus gain a track header, leading icons and a short local opacity transition; reduced motion skips interpolation and no action is delayed",
+    "Menus, transport feedback, player bar, artist header and sidebar reuse measured layouts and borrowed metadata to cut repeated UI work",
+    "Artwork loads visible covers first, keeps the two-worker limit and adds no disk cache; loaded covers no longer draw a placeholder underneath, and cache eviction refreshes affected views",
+    "All 172 native references repeat exactly on macOS 15.8.2; four track-menu captures and four Settings version captures changed; the other 164 references, including every player strip and the play icon, are pixel-identical to 0.8.17",
+    "Four Settings cache references change only the final version digit from 0.8.17 to 0.8.18"
   ]
 }
